@@ -1,5 +1,6 @@
 {
   "name": "clocknext",
+  "description": "Official ClockNext plugins for AI coding tools — usage metering and billing.",
   "owner": { "name": "ClockNext", "url": "https://github.com/ClockNext" },
   "plugins": [
     {
