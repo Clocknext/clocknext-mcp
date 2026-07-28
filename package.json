@@ -1,0 +1,42 @@
+{
+  "name": "@clocknext/mcp",
+  "version": "0.1.0",
+  "description": "ClockNext MCP server — meter usage, verify signals, and manage billing from AI coding tools (Claude Code, Cursor, Codex, Antigravity).",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "clocknext-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "clocknext",
+    "mcp",
+    "model-context-protocol",
+    "usage-based-billing",
+    "metering",
+    "ai-agents"
+  ],
+  "dependencies": {
+    "@clocknext/sdk": "file:../clocknext-sdk",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
