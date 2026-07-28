@@ -1,8 +1,9 @@
 # dependencies
 /node_modules
 
-# build output
-/dist
+# build output — dist/ IS committed: the Claude Code plugin runs it directly
+# (self-contained bundle via tsup `noExternal`). Rebuild with `npm run build`
+# before committing changes.
 *.tsbuildinfo
 
 # env / secrets

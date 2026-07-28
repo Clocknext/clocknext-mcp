@@ -9,10 +9,23 @@ It runs **locally over stdio**: your AI tool spawns it as a subprocess, and your
 organisation's `cnk_…` API key stays in the server's environment — never in the
 model's context.
 
-## Setup
+## Install as a Claude Code plugin (recommended)
+
+In Claude Code:
+
+```
+/plugin marketplace add ClockNext/clocknext-mcp
+/plugin install clocknext@clocknext
+```
+
+Claude Code prompts for your ClockNext API key at install (stored securely) and
+wires the server up automatically — no manual config, no env vars. Run `/mcp` to
+confirm the `clocknext` tools are available.
+
+## Manual setup (other MCP clients)
 
 You need a ClockNext API key (Settings → API Keys). Then add the server to your
-tool's MCP config. The published package runs with no install step via `npx`.
+tool's MCP config.
 
 **Claude Code**
 
