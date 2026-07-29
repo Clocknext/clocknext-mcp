@@ -22242,6 +22242,263 @@ function errMsg(err) {
   return err instanceof Error ? err.message : String(err);
 }
 
+// src/tools/catalogue.ts
+var modelBundle = external_exports.array(
+  external_exports.object({
+    orgModelId: external_exports.string().describe("A model id from clocknext_list_models."),
+    modelName: external_exports.string().optional().describe("Display label; the server defaults it from the model when omitted."),
+    tokens: external_exports.number().describe("Total tokens this bundle entry represents."),
+    input: external_exports.number().describe("Input tokens."),
+    output: external_exports.number().describe("Output tokens."),
+    cache: external_exports.number().describe("Cache tokens.")
+  })
+).optional().describe("Optional per-model token allocation mapping for this entitlement.");
+var planComponent = external_exports.object({
+  type: external_exports.enum(["WALLET", "FLAT", "CREDIT", "OUTCOME", "UNIT"]).describe("The meter type of this entitlement line."),
+  billingMode: external_exports.enum(["ADVANCE", "ARREAR"]).describe(
+    "ADVANCE bills up-front for the cycle (needs amount/quantity); ARREAR meters and bills what was consumed."
+  ),
+  amount: external_exports.number().optional().describe(
+    "WALLET or FLAT only, and REQUIRED for them (USD). WALLET = prepaid balance; FLAT = one-off fee."
+  ),
+  creditId: external_exports.string().optional().describe("CREDIT only: id of an existing credit (clocknext_list_credits)."),
+  outcomeId: external_exports.string().optional().describe("OUTCOME only: id of an existing outcome (clocknext_list_outcomes)."),
+  unitId: external_exports.string().optional().describe("UNIT only: id of an existing unit (clocknext_list_units)."),
+  quantity: external_exports.number().optional().describe(
+    "CREDIT/OUTCOME/UNIT only: the granted quantity \u2014 REQUIRED when billingMode is ADVANCE, omit when ARREAR (metered)."
+  )
+}).describe("One entitlement line in the plan.");
+var unitTier = external_exports.object({
+  upTo: external_exports.number().nullable().describe("Upper bound of this tier; only the LAST tier may be null (unbounded)."),
+  price: external_exports.number().describe("Price for this tier.")
+});
+var planInput = {
+  name: external_exports.string().describe("Plan name."),
+  description: external_exports.string().nullish().describe("Optional description."),
+  billingCycle: external_exports.enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "YEARLY", "EVERY_5_MIN", "FREE"]).describe("Billing cadence. FREE plans must be ADVANCE-only with no FLAT component."),
+  carryForward: external_exports.boolean().optional().describe("Carry an unused balance into the next cycle. Default true."),
+  currencyCode: external_exports.string().optional().describe("ISO 4217 (3 letters). Default USD."),
+  isActive: external_exports.boolean().optional().describe("Whether the plan is active/sellable."),
+  components: external_exports.array(planComponent).min(1).describe(
+    "At least one entitlement line. CREDIT/OUTCOME/UNIT components reference an existing resource by id \u2014 create those first."
+  )
+};
+var creditInput = {
+  name: external_exports.string().describe("Credit name."),
+  agentKey: external_exports.string().describe(
+    "Lowercased stable key your code passes to signals.credit({ agentKey }). The credit's durable identity."
+  ),
+  basePrice: external_exports.number().describe("Base cost per credit before margin."),
+  marginPercent: external_exports.number().describe("Margin percent applied over basePrice."),
+  pricePerCredit: external_exports.number().describe("Final price charged per credit."),
+  description: external_exports.string().optional(),
+  tokensPerCredit: external_exports.number().optional().describe("If this credit meters LLM tokens: how many tokens equal one credit."),
+  modelBundle
+};
+var outcomeInput = {
+  name: external_exports.string().describe("Outcome name."),
+  basePrice: external_exports.number().describe("Base cost per outcome before margin."),
+  marginPercent: external_exports.number().describe("Margin percent applied over basePrice."),
+  pricePerOutcome: external_exports.number().describe("Final price charged per completed outcome."),
+  description: external_exports.string().nullish(),
+  isActive: external_exports.boolean().optional(),
+  steps: external_exports.array(
+    external_exports.object({
+      name: external_exports.string().describe("Step name (unique within the outcome)."),
+      agentKey: external_exports.string().describe("Lowercased stable key your code passes to signals.outcome({ agentKey })."),
+      basePrice: external_exports.number().describe("Base price for this step."),
+      modelBundle
+    })
+  ).min(1).max(50).describe("1\u201350 steps; step names and agent keys must each be unique.")
+};
+var unitInput = {
+  name: external_exports.string().describe("Unit name."),
+  pricingType: external_exports.enum(["FLAT", "SLAB", "VOLUME"]).describe("FLAT = a single per-event price; SLAB/VOLUME = tiered pricing."),
+  flatPrice: external_exports.number().optional().describe("FLAT only: price per event. Defaults to 0."),
+  tiers: external_exports.array(unitTier).max(50).optional().describe("SLAB/VOLUME only: 1\u201350 tiers, ordered; only the last may have upTo:null."),
+  description: external_exports.string().nullish(),
+  isActive: external_exports.boolean().optional()
+};
+function registerCrud(server, opts) {
+  const { resource, plural, api, input, desc } = opts;
+  server.registerTool(
+    `clocknext_list_${plural}`,
+    {
+      title: `ClockNext: list ${plural}`,
+      description: desc.list,
+      inputSchema: {
+        active: external_exports.boolean().optional().describe(`Only return active ${plural} when true; omit to return all.`)
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async ({ active }) => {
+      try {
+        const rows = await api.list(active === void 0 ? {} : { active });
+        return jsonResult({
+          count: Array.isArray(rows) ? rows.length : void 0,
+          [plural]: rows
+        });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    `clocknext_get_${resource}`,
+    {
+      title: `ClockNext: get ${resource}`,
+      description: desc.get,
+      inputSchema: { id: external_exports.string().describe(`The ${resource} id.`) },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async ({ id }) => {
+      try {
+        return jsonResult(await api.get(id));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    `clocknext_create_${resource}`,
+    {
+      title: `ClockNext: create ${resource}`,
+      description: desc.create,
+      inputSchema: input,
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        const res = await api.create(args);
+        return jsonResult(res ?? { ok: true });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    `clocknext_update_${resource}`,
+    {
+      title: `ClockNext: update ${resource}`,
+      description: desc.update,
+      inputSchema: {
+        id: external_exports.string().describe(`The ${resource} id to update.`),
+        ...input
+      },
+      annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        const { id, ...rest } = args;
+        const res = await api.update(id, rest);
+        return jsonResult(res ?? { ok: true });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    `clocknext_archive_${resource}`,
+    {
+      title: `ClockNext: archive ${resource}`,
+      description: desc.archive,
+      inputSchema: { id: external_exports.string().describe(`The ${resource} id to archive (deactivate).`) },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true
+      }
+    },
+    async ({ id }) => {
+      try {
+        const res = await api.setActive(id, false);
+        return jsonResult(res ?? { ok: true, archived: id });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+}
+function registerCatalogueTools(server, cnk) {
+  registerCrud(server, {
+    resource: "plan",
+    plural: "plans",
+    api: {
+      list: (p) => cnk.plans.list(p),
+      get: (id) => cnk.plans.get(id),
+      create: (i) => cnk.plans.create(i),
+      update: (id, i) => cnk.plans.update(id, i),
+      setActive: (id, a) => cnk.plans.setActive(id, a)
+    },
+    input: planInput,
+    desc: {
+      list: "List the organisation's billing plans (id, name, billing cycle, price, active). Use it to find a plan id or to see what's on offer. Pass active=true for only sellable plans.",
+      get: "Get one plan in full by id \u2014 its entitlement components (wallet/credit/outcome/unit/flat), billing cycle, currency and active state.",
+      create: "Create a billing plan. A plan bundles one or more entitlement `components`: WALLET (prepaid USD balance), FLAT (one-off fee), or CREDIT/OUTCOME/UNIT entitlements that reference an existing credit/outcome/unit BY ID \u2014 so create those first (clocknext_create_credit / _outcome / _unit) and list them to get ids. Each component has a billingMode: ADVANCE (up-front, needs amount/quantity) or ARREAR (metered). FREE plans must be ADVANCE-only with no FLAT component. If a term is unclear, clocknext_search_docs kind=concept first. This creates a real, sellable plan \u2014 get the pricing right before you create it.",
+      update: "Replace a plan by id with a COMPLETE new definition (same shape as create \u2014 a full rewrite, not a patch; omitted fields are dropped). Changes the plan going forward; customers already on it keep their terms. Read it first with clocknext_get_plan, edit, then send the whole thing back.",
+      archive: "Archive (deactivate) a plan by id \u2014 it becomes unsellable, existing customers are unaffected. Reversible (set isActive:true via update). Does NOT hard-delete."
+    }
+  });
+  registerCrud(server, {
+    resource: "credit",
+    plural: "credits",
+    api: {
+      list: (p) => cnk.credits.list(p),
+      get: (id) => cnk.credits.get(id),
+      create: (i) => cnk.credits.create(i),
+      update: (id, i) => cnk.credits.update(id, i),
+      setActive: (id, a) => cnk.credits.setActive(id, a)
+    },
+    input: creditInput,
+    desc: {
+      list: "List the organisation's credit types (id, name, agentKey, price, active). Use it to find a credit id to reference from a plan's CREDIT component.",
+      get: "Get one credit type in full by id \u2014 pricing, token mapping and active state.",
+      create: "Create a credit type: a named entitlement your code draws down via signals.credit({ agentKey }). `agentKey` is the lowercased stable key that ties runtime signals to this credit. Priced as basePrice + marginPercent \u2192 pricePerCredit; optionally map LLM tokens to credits (tokensPerCredit + per-model modelBundle). A plan grants it via a CREDIT component referencing this credit's id. (Returns ok with no body \u2014 list credits to see the new id.)",
+      update: "Replace a credit type by id with a complete new definition (full rewrite, same shape as create). Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately.",
+      archive: "Archive (deactivate) a credit type by id. Reversible; does NOT hard-delete. Plans still referencing it should be updated."
+    }
+  });
+  registerCrud(server, {
+    resource: "outcome",
+    plural: "outcomes",
+    api: {
+      list: (p) => cnk.outcomes.list(p),
+      get: (id) => cnk.outcomes.get(id),
+      create: (i) => cnk.outcomes.create(i),
+      update: (id, i) => cnk.outcomes.update(id, i),
+      setActive: (id, a) => cnk.outcomes.setActive(id, a)
+    },
+    input: outcomeInput,
+    desc: {
+      list: "List the organisation's outcome types (id, name, price, active). Use it to find an outcome id to reference from a plan's OUTCOME component.",
+      get: "Get one outcome type in full by id \u2014 its steps plus in-flight/completed stats.",
+      create: "Create an outcome type: a multi-step deliverable billed per COMPLETED outcome. It has 1\u201350 `steps`, each with its own lowercased agentKey (used by signals.outcome({ agentKey })) and basePrice. Priced basePrice + marginPercent \u2192 pricePerOutcome. A plan grants it via an OUTCOME component referencing this outcome's id.",
+      update: "Replace an outcome type by id with a complete new definition (full rewrite, same shape as create). Step agent keys are the runtime binding \u2014 change them deliberately.",
+      archive: "Archive (deactivate) an outcome type by id. Reversible; does NOT hard-delete."
+    }
+  });
+  registerCrud(server, {
+    resource: "unit",
+    plural: "units",
+    api: {
+      list: (p) => cnk.units.list(p),
+      get: (id) => cnk.units.get(id),
+      create: (i) => cnk.units.create(i),
+      update: (id, i) => cnk.units.update(id, i),
+      setActive: (id, a) => cnk.units.setActive(id, a)
+    },
+    input: unitInput,
+    desc: {
+      list: "List the organisation's unit types (id, name, pricing type, active). Use it to find a unit id to reference from a plan's UNIT component.",
+      get: "Get one unit type in full by id \u2014 pricing type, flat price or tiers, plus usage stats.",
+      create: "Create a unit type: a metered usage unit. Price it FLAT (a single `flatPrice` per event, default 0) or tiered \u2014 pricingType SLAB or VOLUME with `tiers` (1\u201350, ordered; only the last tier may have upTo:null). A plan meters it via a UNIT component referencing this unit's id.",
+      update: "Replace a unit type by id with a complete new definition (full rewrite, same shape as create).",
+      archive: "Archive (deactivate) a unit type by id. Reversible; does NOT hard-delete."
+    }
+  });
+}
+
 // src/tools/http.ts
 async function fetchJson(url, timeoutMs = 1e4) {
   const controller = new AbortController();
@@ -22500,13 +22757,14 @@ function registerWhoami(server, cnk) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.1.2" });
+  const server = new McpServer({ name: "clocknext", version: "0.2.0" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
   registerRecordUsage(server, cnk);
   registerSearchDocs(server);
   registerGetDoc(server);
+  registerCatalogueTools(server, cnk);
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");
 }
