@@ -139,35 +139,48 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
     {
       title: "ClockNext: bulk import customers",
       description:
-        "Bulk-create ClockNext customers in one call — for backfilling an existing user base. Pass an array of customers (each needs name + email; up to 200 per call). They're created sequentially and you get a PER-ROW result (created id, or an error) so one duplicate/bad row never aborts the batch — match results back to your users by email. This bulk path is MCP-only (there is no SDK or public bulk endpoint); for larger imports, call it in chunks of ≤200.",
+        "Bulk-create ClockNext customers in ONE request — for backfilling an existing user base. Pass an array of customers (each needs name + email; up to 200 per call). The whole batch goes to the server in a single call and comes back with a PER-ROW result — created id, or an error — so one duplicate/bad row never aborts the batch. Match results back to your users by email. Runs against a private, MCP-only bulk endpoint (no SDK / public API); for a larger base, call it again in ≤200-row chunks.",
       inputSchema: {
         customers: z
           .array(customerObject)
           .min(1)
           .max(200)
-          .describe("The customers to create (name + email required each; ≤200)."),
+          .describe("The customers to create (name + email required each; ≤200 per call)."),
       },
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ customers }) => {
-      const results: Array<
-        { email: string; ok: true; id: string } | { email: string; ok: false; error: string }
-      > = [];
-      for (const c of customers) {
-        try {
-          const created = await cnk.customers.create(c as CreateCustomerInput);
-          results.push({ email: c.email, ok: true, id: created.id });
-        } catch (err) {
-          results.push({ email: c.email, ok: false, error: errMsg(err) });
-        }
+      const apiKey = process.env.CLOCKNEXT_API_KEY;
+      if (!apiKey) {
+        return errorResult("CLOCKNEXT_API_KEY is not set — cannot import customers.");
       }
-      const created = results.filter((r) => r.ok).length;
-      return jsonResult({
-        total: results.length,
-        created,
-        failed: results.length - created,
-        results,
-      });
+      const base = (
+        process.env.CLOCKNEXT_BASE_URL || "https://payments.clocknext.com"
+      ).replace(/\/+$/, "");
+      try {
+        const res = await fetch(new URL("/api/v1/customers/bulk", base), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json",
+            authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({ customers }),
+          signal: AbortSignal.timeout(60_000), // one batch request; allow headroom
+        });
+        const json = (await res.json().catch(() => ({}))) as {
+          result?: unknown;
+          statusDetail?: { message?: string };
+        };
+        if (!res.ok) {
+          return errorResult(
+            json.statusDetail?.message || `HTTP ${res.status} on bulk import.`,
+          );
+        }
+        return jsonResult(json.result ?? json);
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
     },
   );
 }
