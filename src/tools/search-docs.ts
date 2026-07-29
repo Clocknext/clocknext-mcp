@@ -2,24 +2,9 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { errMsg, errorResult, jsonResult } from "./util";
 import { fetchJson } from "./http";
+import { resolveDocsUrl } from "./docs-url";
 
-/**
- * Base URL of the public ClockNext docs site (help.clocknext.com). The
- * `/api/search` route there is a headless endpoint added specifically for this
- * tool — the docs UI search stays disabled. Override for staging/preview via
- * CLOCKNEXT_DOCS_URL. No API key is needed: the docs (and this search) are public,
- * so an agent can learn ClockNext before any `cnk_…` key is configured.
- *
- * Resolved defensively: an unset, blank, non-http, or unsubstituted
- * (`${user_config.docs_url}`, when a plugin leaves the optional value empty)
- * value all fall back to production, so the tool can never be handed a broken URL.
- */
-function resolveDocsUrl(): string {
-  const raw = process.env.CLOCKNEXT_DOCS_URL?.trim();
-  if (raw && /^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, "");
-  return "https://help.clocknext.com";
-}
-
+// Public docs base URL (help.clocknext.com); no API key needed. See ./docs-url.
 const DOCS_URL = resolveDocsUrl();
 
 type SearchHit = { kind: string; title: string; url: string; snippet: string };

@@ -22242,6 +22242,73 @@ function errMsg(err) {
   return err instanceof Error ? err.message : String(err);
 }
 
+// src/tools/http.ts
+async function fetchJson(url, timeoutMs = 1e4) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { accept: "application/json" }
+    });
+    if (!res.ok) {
+      throw new Error(`request to ${String(url)} returned HTTP ${res.status}`);
+    }
+    return await res.json();
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`request to ${String(url)} timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// src/tools/docs-url.ts
+function resolveDocsUrl() {
+  const raw = process.env.CLOCKNEXT_DOCS_URL?.trim();
+  if (raw && /^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, "");
+  return "https://help.clocknext.com";
+}
+
+// src/tools/get-doc.ts
+var DOCS_URL = resolveDocsUrl();
+var DESCRIPTION = [
+  "Read the FULL contents of a single ClockNext docs page as Markdown. Use this right after clocknext_search_docs: pass the `url` of a promising search result to read the whole page \u2014 endpoints, parameters, request/response fields, and code samples that the search snippet leaves out.",
+  "",
+  "clocknext_search_docs finds WHICH page you need (title + url + a short snippet); this tool reads THAT page in full. A snippet is enough to choose a page, never enough to implement against \u2014 when you need exact field names, types, or the request body, call this.",
+  "",
+  "ALWAYS use this for ClockNext docs instead of any external web-fetch/browser tool: it returns the authoritative page verbatim, whereas an external fetch routes the page through a summariser that can silently drop details (e.g. required fields like agentKey/idempotencyKey)."
+].join("\n");
+function registerGetDoc(server) {
+  server.registerTool(
+    "clocknext_get_doc",
+    {
+      title: "ClockNext: read a docs page",
+      description: DESCRIPTION,
+      inputSchema: {
+        path: external_exports.string().min(1).describe(
+          "The `url` (or path) of a ClockNext docs page \u2014 typically taken from a clocknext_search_docs result, e.g. 'https://help.clocknext.com/docs/sdk/signals' or '/docs/api-reference/quickstart'."
+        )
+      }
+    },
+    async ({ path }) => {
+      try {
+        const url = new URL("/api/doc", DOCS_URL);
+        url.searchParams.set("path", path);
+        const doc = await fetchJson(url);
+        return jsonResult({
+          ...doc,
+          url: new URL(doc.path, DOCS_URL).toString()
+        });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+}
+
 // src/tools/list-models.ts
 function registerListModels(server, cnk) {
   server.registerTool(
@@ -22331,37 +22398,9 @@ function registerRecordUsage(server, cnk) {
   );
 }
 
-// src/tools/http.ts
-async function fetchJson(url, timeoutMs = 1e4) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { accept: "application/json" }
-    });
-    if (!res.ok) {
-      throw new Error(`request to ${String(url)} returned HTTP ${res.status}`);
-    }
-    return await res.json();
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error(`request to ${String(url)} timed out after ${timeoutMs}ms`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // src/tools/search-docs.ts
-function resolveDocsUrl() {
-  const raw = process.env.CLOCKNEXT_DOCS_URL?.trim();
-  if (raw && /^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, "");
-  return "https://help.clocknext.com";
-}
-var DOCS_URL = resolveDocsUrl();
-var DESCRIPTION = [
+var DOCS_URL2 = resolveDocsUrl();
+var DESCRIPTION2 = [
   "Search ClockNext's official documentation and get back the most relevant pages (title, URL, and a snippet). ClockNext is a usage-based billing platform: you meter product/AI usage, price it against plans and units, and bill customers for it.",
   "",
   "ALWAYS prefer this over answering from memory \u2014 the docs are the source of truth and are more current than your training data. Call it before you explain a ClockNext concept, design an integration, or reach for any other ClockNext tool.",
@@ -22380,7 +22419,7 @@ function registerSearchDocs(server) {
     "clocknext_search_docs",
     {
       title: "ClockNext: search docs",
-      description: DESCRIPTION,
+      description: DESCRIPTION2,
       inputSchema: {
         query: external_exports.string().min(1).describe(
           "What to look for, in natural language \u2014 e.g. 'how do I record token usage', 'create a plan with tiered pricing', 'what is a unit vs an outcome'."
@@ -22393,7 +22432,7 @@ function registerSearchDocs(server) {
     },
     async ({ query, kind, limit }) => {
       try {
-        const url = new URL("/api/search", DOCS_URL);
+        const url = new URL("/api/search", DOCS_URL2);
         url.searchParams.set("query", query);
         if (kind) url.searchParams.set("kind", kind);
         if (limit) url.searchParams.set("limit", String(limit));
@@ -22401,13 +22440,13 @@ function registerSearchDocs(server) {
         const results = (data.results ?? []).map((r) => ({
           ...r,
           // The endpoint returns relative paths; make them clickable absolute URLs.
-          url: new URL(r.url, DOCS_URL).toString()
+          url: new URL(r.url, DOCS_URL2).toString()
         }));
         return jsonResult({
           query,
           kind: kind ?? null,
           count: results.length,
-          docsUrl: DOCS_URL,
+          docsUrl: DOCS_URL2,
           results
         });
       } catch (err) {
@@ -22461,12 +22500,13 @@ function registerWhoami(server, cnk) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.1.1" });
+  const server = new McpServer({ name: "clocknext", version: "0.1.2" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
   registerRecordUsage(server, cnk);
   registerSearchDocs(server);
+  registerGetDoc(server);
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");
 }

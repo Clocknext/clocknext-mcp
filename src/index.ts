@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { makeClient } from "./client";
+import { registerGetDoc } from "./tools/get-doc";
 import { registerListModels } from "./tools/list-models";
 import { registerRecordUsage } from "./tools/record-usage";
 import { registerSearchDocs } from "./tools/search-docs";
@@ -18,13 +19,14 @@ import { registerWhoami } from "./tools/whoami";
 async function main(): Promise<void> {
   const cnk = makeClient(); // throws with a clear message if the key is missing
 
-  const server = new McpServer({ name: "clocknext", version: "0.1.1" });
+  const server = new McpServer({ name: "clocknext", version: "0.1.2" });
 
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
   registerRecordUsage(server, cnk);
   registerSearchDocs(server); // docs are public — no API key needed
+  registerGetDoc(server); // reads a full docs page; also no API key needed
 
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");
