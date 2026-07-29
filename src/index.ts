@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { makeClient } from "./client";
 import { registerListModels } from "./tools/list-models";
 import { registerRecordUsage } from "./tools/record-usage";
+import { registerSearchDocs } from "./tools/search-docs";
 import { registerVerifySignal } from "./tools/verify-signal";
 import { registerWhoami } from "./tools/whoami";
 
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
   registerRecordUsage(server, cnk);
+  registerSearchDocs(server); // docs are public — no API key needed
 
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");

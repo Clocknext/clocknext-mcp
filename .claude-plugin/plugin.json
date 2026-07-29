@@ -14,6 +14,12 @@
       "description": "Your organisation's cnk_… key (Settings → API Keys). Stored securely.",
       "sensitive": true,
       "required": true
+    },
+    "docs_url": {
+      "type": "string",
+      "title": "Docs base URL (optional)",
+      "description": "Only for staging/preview. Leave blank to use the production docs at https://help.clocknext.com.",
+      "required": false
     }
   },
   "mcpServers": {
@@ -21,7 +27,8 @@
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"],
       "env": {
-        "CLOCKNEXT_API_KEY": "${user_config.api_key}"
+        "CLOCKNEXT_API_KEY": "${user_config.api_key}",
+        "CLOCKNEXT_DOCS_URL": "${user_config.docs_url}"
       }
     }
   }

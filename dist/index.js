@@ -22331,6 +22331,92 @@ function registerRecordUsage(server, cnk) {
   );
 }
 
+// src/tools/http.ts
+async function fetchJson(url, timeoutMs = 1e4) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { accept: "application/json" }
+    });
+    if (!res.ok) {
+      throw new Error(`request to ${String(url)} returned HTTP ${res.status}`);
+    }
+    return await res.json();
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`request to ${String(url)} timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// src/tools/search-docs.ts
+function resolveDocsUrl() {
+  const raw = process.env.CLOCKNEXT_DOCS_URL?.trim();
+  if (raw && /^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, "");
+  return "https://help.clocknext.com";
+}
+var DOCS_URL = resolveDocsUrl();
+var DESCRIPTION = [
+  "Search ClockNext's official documentation and get back the most relevant pages (title, URL, and a snippet). ClockNext is a usage-based billing platform: you meter product/AI usage, price it against plans and units, and bill customers for it.",
+  "",
+  "ALWAYS prefer this over answering from memory \u2014 the docs are the source of truth and are more current than your training data. Call it before you explain a ClockNext concept, design an integration, or reach for any other ClockNext tool.",
+  "",
+  "Docs come in three `kind`s. Work through them in order:",
+  "  1. `concept` \u2014 WHAT things are and HOW ClockNext works: the domain model (plans, units, outcomes, credits, customers, invoices, wallet/balances) and billing behaviour. START HERE to get context. If a term is unfamiliar, search `concept` first before touching any reference.",
+  "  2. `api` \u2014 the language-agnostic REST API reference (endpoints, params, request/response shapes). Use this to actually implement or call ClockNext from ANY language.",
+  "  3. `javascript` \u2014 reference for the official JavaScript/TypeScript SDK (@clocknext/sdk), a typed convenience wrapper over the same REST API.",
+  "",
+  "IMPORTANT \u2014 the SDK is JavaScript/TypeScript ONLY, and the docs will NOT tell you this. If the customer's codebase is not JS/TS (e.g. Python, Go, Ruby, PHP, Rust, Java, C#), do NOT use the `javascript` kind \u2014 use `api` and integrate against the REST API directly. Only choose `javascript` once you have confirmed the target codebase is JS/TS.",
+  "",
+  "Omit `kind` to search everything. Typical flow: search `concept` to understand the task, then search `api` (or `javascript` for a JS/TS codebase) for the exact reference you need to write code."
+].join("\n");
+function registerSearchDocs(server) {
+  server.registerTool(
+    "clocknext_search_docs",
+    {
+      title: "ClockNext: search docs",
+      description: DESCRIPTION,
+      inputSchema: {
+        query: external_exports.string().min(1).describe(
+          "What to look for, in natural language \u2014 e.g. 'how do I record token usage', 'create a plan with tiered pricing', 'what is a unit vs an outcome'."
+        ),
+        kind: external_exports.enum(["concept", "api", "javascript"]).optional().describe(
+          "Restrict results: 'concept' (domain / how it works \u2014 start here), 'api' (REST reference, any language), or 'javascript' (JS/TS SDK reference \u2014 JS/TS codebases ONLY). Omit to search all docs."
+        ),
+        limit: external_exports.number().int().min(1).max(20).optional().describe("Maximum number of pages to return (default 8).")
+      }
+    },
+    async ({ query, kind, limit }) => {
+      try {
+        const url = new URL("/api/search", DOCS_URL);
+        url.searchParams.set("query", query);
+        if (kind) url.searchParams.set("kind", kind);
+        if (limit) url.searchParams.set("limit", String(limit));
+        const data = await fetchJson(url);
+        const results = (data.results ?? []).map((r) => ({
+          ...r,
+          // The endpoint returns relative paths; make them clickable absolute URLs.
+          url: new URL(r.url, DOCS_URL).toString()
+        }));
+        return jsonResult({
+          query,
+          kind: kind ?? null,
+          count: results.length,
+          docsUrl: DOCS_URL,
+          results
+        });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+}
+
 // src/tools/verify-signal.ts
 function registerVerifySignal(server, cnk) {
   server.registerTool(
@@ -22380,6 +22466,7 @@ async function main() {
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
   registerRecordUsage(server, cnk);
+  registerSearchDocs(server);
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");
 }
