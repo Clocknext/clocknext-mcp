@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { makeClient } from "./client";
+import { registerAddModel } from "./tools/add-model";
 import { registerCatalogueTools } from "./tools/catalogue";
 import { registerGetDoc } from "./tools/get-doc";
 import { registerListModels } from "./tools/list-models";
@@ -20,7 +21,7 @@ import { registerWhoami } from "./tools/whoami";
 async function main(): Promise<void> {
   const cnk = makeClient(); // throws with a clear message if the key is missing
 
-  const server = new McpServer({ name: "clocknext", version: "0.2.0" });
+  const server = new McpServer({ name: "clocknext", version: "0.2.1" });
 
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
   registerSearchDocs(server); // docs are public — no API key needed
   registerGetDoc(server); // reads a full docs page; also no API key needed
   registerCatalogueTools(server, cnk); // CRUD for plans/credits/outcomes/units
+  registerAddModel(server); // enable a model (autopriced) via undocumented v1 route
 
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");

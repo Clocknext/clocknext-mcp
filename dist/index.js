@@ -22242,6 +22242,55 @@ function errMsg(err) {
   return err instanceof Error ? err.message : String(err);
 }
 
+// src/tools/add-model.ts
+var DEFAULT_BASE = "https://payments.clocknext.com";
+function registerAddModel(server) {
+  server.registerTool(
+    "clocknext_add_model",
+    {
+      title: "ClockNext: add (enable) a model",
+      description: "Enable a model for the organisation so usage can be metered against it \u2014 afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. AUTOPRICED: give only the `provider` and `model` (its catalog id) and ClockNext copies that model's input/output/cache prices from its pricing catalog \u2014 you never set prices here. Fails cleanly if the model isn't in the catalog or is already enabled, so check clocknext_list_models first.",
+      inputSchema: {
+        provider: external_exports.string().min(1).describe(
+          "The model's provider slug in the ClockNext catalog, e.g. 'openai', 'anthropic', 'google'."
+        ),
+        model: external_exports.string().min(1).describe(
+          "The model's catalog id, e.g. 'gpt-4o' or 'claude-sonnet-4-6'. This becomes the modelId you send in usage signals."
+        )
+      },
+      annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true }
+    },
+    async ({ provider, model }) => {
+      const apiKey = process.env.CLOCKNEXT_API_KEY;
+      if (!apiKey) {
+        return errorResult("CLOCKNEXT_API_KEY is not set \u2014 cannot add a model.");
+      }
+      const base = (process.env.CLOCKNEXT_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
+      try {
+        const res = await fetch(new URL("/api/v1/models", base), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json",
+            authorization: `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({ provider, modelId: model, pricingMode: "AUTO" }),
+          signal: AbortSignal.timeout(1e4)
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return errorResult(
+            json.error || json.message || `HTTP ${res.status} enabling the model.`
+          );
+        }
+        return jsonResult({ ok: true, provider, model, ...json });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+}
+
 // src/tools/catalogue.ts
 var modelBundle = external_exports.array(
   external_exports.object({
@@ -22757,7 +22806,7 @@ function registerWhoami(server, cnk) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.2.0" });
+  const server = new McpServer({ name: "clocknext", version: "0.2.1" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
@@ -22765,6 +22814,7 @@ async function main() {
   registerSearchDocs(server);
   registerGetDoc(server);
   registerCatalogueTools(server, cnk);
+  registerAddModel(server);
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");
 }
