@@ -12,10 +12,17 @@ to ground yourself and to send test signals.
 
 ## 0. Ground yourself first (MCP tools — do this before writing code)
 
+- **`clocknext_search_docs`** + **`clocknext_get_doc`** → read the docs BEFORE writing
+  code. Search kind `javascript` for the SDK, `api` for REST, `concept` for terms, then
+  `get_doc` the best hit for exact method signatures / fields. The docs are the source of
+  truth — don't guess method names or signal shapes, and don't reach for an external web
+  fetch for ClockNext docs.
 - **`clocknext_whoami`** → confirm which org the key points at and whether it's
   `sandbox` or `live`. Integrate against **sandbox** until it's proven.
 - **`clocknext_list_models`** → the valid `modelId` values and their prices. The
-  `model` you send in a signal MUST be one of these ids (matched case-insensitively).
+  `model` you send in a signal MUST be one of these ids (matched case-insensitively). If
+  the model you need isn't enabled, add it with **`clocknext_add_model`** (provider +
+  model, autopriced) or the dashboard.
 
 ## 1. Install + configure
 
@@ -65,8 +72,13 @@ Key rules:
 - Pass an **`idempotencyKey`** (a stable id for the call) so a retry after a lost
   response can't double-bill.
 - `customerId` is the ClockNext customer id for the end-user; map it from the
-  product's own user/tenant id. If the product has no ClockNext customer yet,
-  that must be created first (out of scope here — ask the user how customers map).
+  product's own user/tenant id. If the product has no ClockNext customer yet, create one
+  with **`clocknext_create_customer`** (`{ name, email }`) and store its id on your
+  user/tenant. To wire this into an auth system + backfill existing users, use the
+  **`clocknext-customer-mapping`** skill (and the `clocknext_bulk_import_customers` tool).
+  The customer also needs an **active plan** (a purchase) whose components match the meter,
+  or the signal returns a `PlanError` — use the **`clocknext-onboard-from-pricing`** skill
+  to set up the catalogue (credits/outcomes/units/plans) if it doesn't exist yet.
 
 ## 3. Don't lose signals on serverless / before exit
 
