@@ -22548,6 +22548,134 @@ function registerCatalogueTools(server, cnk) {
   });
 }
 
+// src/tools/customers.ts
+var customerFields = {
+  name: external_exports.string().min(1).describe("Customer / company name."),
+  email: external_exports.string().min(1).describe("Primary email \u2014 required, and the key bulk import matches back on."),
+  description: external_exports.string().nullish(),
+  website: external_exports.string().nullish().describe("The customer's website."),
+  phone: external_exports.string().nullish(),
+  legalName: external_exports.string().nullish(),
+  addressLine1: external_exports.string().nullish(),
+  addressLine2: external_exports.string().nullish(),
+  city: external_exports.string().nullish(),
+  state: external_exports.string().nullish(),
+  country: external_exports.string().nullish(),
+  pincode: external_exports.string().nullish(),
+  taxId: external_exports.string().nullish(),
+  notes: external_exports.string().nullish(),
+  logoUrl: external_exports.string().nullish(),
+  creditAllowance: external_exports.number().optional(),
+  currencyCode: external_exports.string().optional().describe("ISO 4217 (3 letters); must be enabled for the org. Defaults to the org currency.")
+};
+var customerObject = external_exports.object(customerFields);
+function registerCustomerTools(server, cnk) {
+  server.registerTool(
+    "clocknext_create_customer",
+    {
+      title: "ClockNext: create customer",
+      description: "Create a ClockNext customer \u2014 the entity you bill (maps to one of your end-users / tenants / organisations). `name` and `email` are required; everything else is optional profile. Returns the customer with its ClockNext `id`, which you pass as `customerId` when subscribing to a plan (clocknext_create_purchase) and when recording usage (clocknext_record_usage).",
+      inputSchema: customerFields,
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        return jsonResult(await cnk.customers.create(args));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "clocknext_get_customer",
+    {
+      title: "ClockNext: get customer",
+      description: "Fetch one customer by ClockNext id.",
+      inputSchema: { id: external_exports.string().describe("The ClockNext customer id.") },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async ({ id }) => {
+      try {
+        return jsonResult(await cnk.customers.get(id));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "clocknext_list_customers",
+    {
+      title: "ClockNext: list customers",
+      description: "List / search the org's customers, most-recent first (cursor-paginated). Use it to find a customer id or check whether one already exists before creating.",
+      inputSchema: {
+        q: external_exports.string().optional().describe("Search by name or email."),
+        limit: external_exports.number().int().min(1).max(100).optional().describe("Max customers per page."),
+        cursor: external_exports.string().optional().describe("Pagination cursor from a previous page's nextCursor.")
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        return jsonResult(await cnk.customers.list(args));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "clocknext_create_purchase",
+    {
+      title: "ClockNext: subscribe customer to a plan",
+      description: "Subscribe a customer to a plan (a 'purchase') \u2014 this is what activates the plan for that customer. A usage signal only prices if the customer has an active plan whose components match the meter (credit / outcome / unit), so do this after clocknext_create_customer + clocknext_create_plan. Used to wire up a dummy customer before firing test signals.",
+      inputSchema: {
+        customerId: external_exports.string().describe("The ClockNext customer id (from clocknext_create_customer / _list_customers)."),
+        planId: external_exports.string().describe("The plan id to subscribe them to (from clocknext_create_plan / _list_plans)."),
+        billingDate: external_exports.string().optional().describe("YYYY-MM-DD. Defaults to today; must be a valid, non-past date."),
+        notes: external_exports.string().optional(),
+        autoPayment: external_exports.boolean().optional().describe("Charge automatically when the invoice is due."),
+        voidAfterMinutes: external_exports.number().optional().describe("Auto-void the purchase if it stays unpaid after N minutes.")
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        return jsonResult(await cnk.purchases.create(args));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "clocknext_bulk_import_customers",
+    {
+      title: "ClockNext: bulk import customers",
+      description: "Bulk-create ClockNext customers in one call \u2014 for backfilling an existing user base. Pass an array of customers (each needs name + email; up to 200 per call). They're created sequentially and you get a PER-ROW result (created id, or an error) so one duplicate/bad row never aborts the batch \u2014 match results back to your users by email. This bulk path is MCP-only (there is no SDK or public bulk endpoint); for larger imports, call it in chunks of \u2264200.",
+      inputSchema: {
+        customers: external_exports.array(customerObject).min(1).max(200).describe("The customers to create (name + email required each; \u2264200).")
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true }
+    },
+    async ({ customers }) => {
+      const results = [];
+      for (const c of customers) {
+        try {
+          const created2 = await cnk.customers.create(c);
+          results.push({ email: c.email, ok: true, id: created2.id });
+        } catch (err) {
+          results.push({ email: c.email, ok: false, error: errMsg(err) });
+        }
+      }
+      const created = results.filter((r) => r.ok).length;
+      return jsonResult({
+        total: results.length,
+        created,
+        failed: results.length - created,
+        results
+      });
+    }
+  );
+}
+
 // src/tools/http.ts
 async function fetchJson(url, timeoutMs = 1e4) {
   const controller = new AbortController();
@@ -22806,7 +22934,7 @@ function registerWhoami(server, cnk) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.2.1" });
+  const server = new McpServer({ name: "clocknext", version: "0.3.0" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
@@ -22814,6 +22942,7 @@ async function main() {
   registerSearchDocs(server);
   registerGetDoc(server);
   registerCatalogueTools(server, cnk);
+  registerCustomerTools(server, cnk);
   registerAddModel(server);
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");
