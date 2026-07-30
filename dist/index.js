@@ -21344,7 +21344,7 @@ function computeBackoff(attempt, opts, retryAfterMs, rand = Math.random) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-var SDK_VERSION = "0.3.0";
+var SDK_VERSION = "0.4.0";
 var Transport = class {
   constructor(cfg) {
     this.cfg = cfg;
@@ -22010,9 +22010,9 @@ var Signals = class {
     return { customer: res.customer, totals: res.totals, logs: res.logs };
   }
   /**
-   * Record one unit-metered event (a fixed-price meter with no tokens), matched
-   * to a catalog unit by name. Sent immediately — unit events are not buffered.
-   * `POST /api/v1/units`.
+   * Record one unit-metered event (a fixed-price meter with no tokens),
+   * addressed to a catalog unit by its `agentKey`. Sent immediately — unit
+   * events are not buffered. `POST /api/v1/units`.
    */
   async unit(input) {
     return this.transport.request({
@@ -22020,7 +22020,7 @@ var Signals = class {
       path: "/api/v1/units",
       body: {
         customerId: input.customerId,
-        unit: input.unit,
+        agentKey: input.agentKey,
         ...input.member ? { member: input.member } : {}
       },
       // Best-effort metering opts into retries on transient failures.
