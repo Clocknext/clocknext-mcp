@@ -9,9 +9,10 @@ import { errMsg, errorResult, jsonResult } from "./util";
 
 /**
  * Customer tools — create/read customers, subscribe them to a plan (purchase),
- * and a bulk import. These wrap existing @clocknext/sdk methods (no server change
- * needed). They power the onboarding skill's "dummy customer + test signal" step
- * and the customer-mapping / bulk-import skills.
+ * read a customer's usage / balances / current plan, and a bulk import. These wrap
+ * existing @clocknext/sdk methods (no server change needed). They power the
+ * clocknext-setup-billing skill's "dummy customer + test signal + confirm it landed"
+ * step and the clocknext-customer-mapping / bulk-import skills.
  */
 
 // Shared customer profile fields. `name` + `email` are required on create.
@@ -95,6 +96,69 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
     async (args) => {
       try {
         return jsonResult(await cnk.customers.list(args));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    "clocknext_get_customer_usage",
+    {
+      title: "ClockNext: get customer usage",
+      description:
+        "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed — e.g. after running the product's code so it fires a real signal, check the event shows up here with the expected model, tokens, and cost. For a signal you fire directly, clocknext_record_usage already returns the priced log inline, so this is mainly for signals sent by the running codebase.",
+      inputSchema: {
+        id: z.string().describe("The ClockNext customer id."),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Max usage rows to return (most recent first)."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ id, limit }) => {
+      try {
+        return jsonResult(await cnk.customers.usage(id, limit ? { limit } : undefined));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    "clocknext_get_customer_balances",
+    {
+      title: "ClockNext: get customer balances",
+      description:
+        "Fetch a customer's current wallet / credit / outcome / unit balances. Use it to confirm a purchase granted the expected entitlements, or that a test signal drew the balance down as expected.",
+      inputSchema: { id: z.string().describe("The ClockNext customer id.") },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ id }) => {
+      try {
+        return jsonResult(await cnk.customers.balances(id));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    "clocknext_get_customer_plan",
+    {
+      title: "ClockNext: get customer plan",
+      description:
+        "Fetch a customer's current active plan (from their purchase). Use it to confirm a customer is subscribed to the plan you expect before firing a test signal.",
+      inputSchema: { id: z.string().describe("The ClockNext customer id.") },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ id }) => {
+      try {
+        return jsonResult(await cnk.customers.plan(id));
       } catch (err) {
         return errorResult(errMsg(err));
       }

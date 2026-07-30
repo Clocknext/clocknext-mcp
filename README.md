@@ -71,9 +71,18 @@ env = { CLOCKNEXT_API_KEY = "cnk_your_key" }
 | `clocknext_list_models` | List enabled models + USD prices per 1M tokens. Use a `modelId` in signals. |
 | `clocknext_verify_signal` | **Dry run** — validate + price a signal without recording it. Preflight your setup. |
 | `clocknext_record_usage` | Record one real (billed) usage signal. Supports an `idempotencyKey` for safe retries. |
+| `clocknext_get_customer_usage` | Read back a customer's recent usage logs — confirm a signal fired by the running code landed. |
+| `clocknext_get_customer_balances` | A customer's current wallet / credit / outcome / unit balances. |
+| `clocknext_get_customer_plan` | A customer's current active plan (from their purchase). |
+
+Plus catalogue CRUD (`create_plan` / `create_credit` / `create_outcome` /
+`create_unit` …), customer tools (`create_customer`, `create_purchase`,
+`bulk_import_customers`), `add_model`, and the docs tools (`search_docs`,
+`get_doc`). Run `/mcp` to see the full list.
 
 A typical agent flow: `whoami` → `list_models` → `verify_signal` (confirm the
-customer/model/plan price correctly) → `record_usage`.
+customer/model/plan price correctly) → `record_usage` → `get_customer_usage`
+(confirm it landed).
 
 ## Development
 
