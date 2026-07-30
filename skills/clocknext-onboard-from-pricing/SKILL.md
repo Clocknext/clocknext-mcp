@@ -37,7 +37,8 @@ Work the steps in order.
 - **Outcome** — billed per completed multi-step deliverable ("per resolved ticket",
   "per shipped app", "per successful deploy"). → `clocknext_create_outcome` + its steps.
 - **Unit** — a metered usage unit, flat or tiered ("per seat", "per API call", "per GB",
-  "per build minute"). → `clocknext_create_unit`.
+  "per build minute"). Give it a stable `agentKey` (like a credit/outcome) — the key it's
+  reported against. → `clocknext_create_unit`.
 - **Wallet** — a prepaid USD balance drawn down → a WALLET plan component.
 - **Flat** — a fixed recurring / one-off fee → a FLAT plan component.
 

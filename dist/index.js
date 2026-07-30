@@ -22362,6 +22362,9 @@ var outcomeInput = {
 };
 var unitInput = {
   name: external_exports.string().describe("Unit name."),
+  agentKey: external_exports.string().describe(
+    "Lowercased stable key consumption is reported against (signals.unit({ agentKey })). The unit's durable identity \u2014 unique org-wide, chars [a-z0-9._-]; a rename never changes it."
+  ),
   pricingType: external_exports.enum(["FLAT", "SLAB", "VOLUME"]).describe("FLAT = a single per-event price; SLAB/VOLUME = tiered pricing."),
   flatPrice: external_exports.number().optional().describe("FLAT only: price per event. Defaults to 0."),
   tiers: external_exports.array(unitTier).max(50).optional().describe("SLAB/VOLUME only: 1\u201350 tiers, ordered; only the last may have upTo:null."),
@@ -22541,8 +22544,8 @@ function registerCatalogueTools(server, cnk) {
     desc: {
       list: "List the organisation's unit types (id, name, pricing type, active). Use it to find a unit id to reference from a plan's UNIT component.",
       get: "Get one unit type in full by id \u2014 pricing type, flat price or tiers, plus usage stats.",
-      create: "Create a unit type: a metered usage unit. Price it FLAT (a single `flatPrice` per event, default 0) or tiered \u2014 pricingType SLAB or VOLUME with `tiers` (1\u201350, ordered; only the last tier may have upTo:null). A plan meters it via a UNIT component referencing this unit's id.",
-      update: "Replace a unit type by id with a complete new definition (full rewrite, same shape as create).",
+      create: "Create a unit type: a metered usage unit reported against a lowercased stable `agentKey` (signals.unit({ agentKey })) \u2014 its durable identity, unique org-wide. Price it FLAT (a single `flatPrice` per event, default 0) or tiered \u2014 pricingType SLAB or VOLUME with `tiers` (1\u201350, ordered; only the last tier may have upTo:null). A plan meters it via a UNIT component referencing this unit's id.",
+      update: "Replace a unit type by id with a complete new definition (full rewrite, same shape as create, including `agentKey`). Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately.",
       archive: "Archive (deactivate) a unit type by id. Reversible; does NOT hard-delete."
     }
   });

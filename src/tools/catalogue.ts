@@ -144,6 +144,11 @@ const outcomeInput: z.ZodRawShape = {
 
 const unitInput: z.ZodRawShape = {
   name: z.string().describe("Unit name."),
+  agentKey: z
+    .string()
+    .describe(
+      "Lowercased stable key consumption is reported against (signals.unit({ agentKey })). The unit's durable identity — unique org-wide, chars [a-z0-9._-]; a rename never changes it.",
+    ),
   pricingType: z
     .enum(["FLAT", "SLAB", "VOLUME"])
     .describe("FLAT = a single per-event price; SLAB/VOLUME = tiered pricing."),
@@ -373,9 +378,9 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
       list: "List the organisation's unit types (id, name, pricing type, active). Use it to find a unit id to reference from a plan's UNIT component.",
       get: "Get one unit type in full by id — pricing type, flat price or tiers, plus usage stats.",
       create:
-        "Create a unit type: a metered usage unit. Price it FLAT (a single `flatPrice` per event, default 0) or tiered — pricingType SLAB or VOLUME with `tiers` (1–50, ordered; only the last tier may have upTo:null). A plan meters it via a UNIT component referencing this unit's id.",
+        "Create a unit type: a metered usage unit reported against a lowercased stable `agentKey` (signals.unit({ agentKey })) — its durable identity, unique org-wide. Price it FLAT (a single `flatPrice` per event, default 0) or tiered — pricingType SLAB or VOLUME with `tiers` (1–50, ordered; only the last tier may have upTo:null). A plan meters it via a UNIT component referencing this unit's id.",
       update:
-        "Replace a unit type by id with a complete new definition (full rewrite, same shape as create).",
+        "Replace a unit type by id with a complete new definition (full rewrite, same shape as create, including `agentKey`). Changing `agentKey` re-points which runtime signals map here — do it deliberately.",
       archive: "Archive (deactivate) a unit type by id. Reversible; does NOT hard-delete.",
     },
   });
