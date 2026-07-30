@@ -22,7 +22,7 @@ import { registerWhoami } from "./tools/whoami";
 async function main(): Promise<void> {
   const cnk = makeClient(); // throws with a clear message if the key is missing
 
-  const server = new McpServer({ name: "clocknext", version: "0.3.2" });
+  const server = new McpServer({ name: "clocknext", version: "0.5.0" });
 
   registerWhoami(server, cnk);
   registerListModels(server, cnk);

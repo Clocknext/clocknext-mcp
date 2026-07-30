@@ -22626,6 +22626,57 @@ function registerCustomerTools(server, cnk) {
     }
   );
   server.registerTool(
+    "clocknext_get_customer_usage",
+    {
+      title: "ClockNext: get customer usage",
+      description: "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed \u2014 e.g. after running the product's code so it fires a real signal, check the event shows up here with the expected model, tokens, and cost. For a signal you fire directly, clocknext_record_usage already returns the priced log inline, so this is mainly for signals sent by the running codebase.",
+      inputSchema: {
+        id: external_exports.string().describe("The ClockNext customer id."),
+        limit: external_exports.number().int().min(1).max(100).optional().describe("Max usage rows to return (most recent first).")
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async ({ id, limit }) => {
+      try {
+        return jsonResult(await cnk.customers.usage(id, limit ? { limit } : void 0));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "clocknext_get_customer_balances",
+    {
+      title: "ClockNext: get customer balances",
+      description: "Fetch a customer's current wallet / credit / outcome / unit balances. Use it to confirm a purchase granted the expected entitlements, or that a test signal drew the balance down as expected.",
+      inputSchema: { id: external_exports.string().describe("The ClockNext customer id.") },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async ({ id }) => {
+      try {
+        return jsonResult(await cnk.customers.balances(id));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "clocknext_get_customer_plan",
+    {
+      title: "ClockNext: get customer plan",
+      description: "Fetch a customer's current active plan (from their purchase). Use it to confirm a customer is subscribed to the plan you expect before firing a test signal.",
+      inputSchema: { id: external_exports.string().describe("The ClockNext customer id.") },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async ({ id }) => {
+      try {
+        return jsonResult(await cnk.customers.plan(id));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
     "clocknext_create_purchase",
     {
       title: "ClockNext: subscribe customer to a plan",
@@ -22948,7 +22999,7 @@ function registerWhoami(server, cnk) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.3.2" });
+  const server = new McpServer({ name: "clocknext", version: "0.5.0" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
