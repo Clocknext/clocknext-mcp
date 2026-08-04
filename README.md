@@ -43,18 +43,29 @@ on its own has nothing to call.
 
 Install it with **[`npx skills`](https://www.skills.sh)** — one command, works
 across Claude Code, Cursor, Codex, Windsurf, Gemini, Antigravity, VS Code, and
-~20 other agents:
+~20 other agents. **Target your agent with `--agent`** so it lands where that
+agent actually looks:
 
 ```bash
-# this project:
-npx skills add ClockNext/clocknext-mcp
-# or user-wide (all projects / all agents):
-npx skills add ClockNext/clocknext-mcp --global
+# user-wide (all projects), for a specific agent:
+npx skills add ClockNext/clocknext-mcp --global --agent claude-code
+# …or this project only:
+npx skills add ClockNext/clocknext-mcp --agent claude-code
 ```
 
-It reads the repo, finds `skills/clocknext-onboarding/` (`SKILL.md` + its
-`references/`), and installs it into whatever agent(s) you have. `npx skills list`
-shows what's installed; `npx skills remove clocknext-onboarding` removes it.
+Swap `claude-code` for `cursor`, `codex`, `windsurf`, … (or `*` for every
+detected agent). `npx skills list` shows what's installed;
+`npx skills remove clocknext-onboarding` removes it. After installing, **restart
+the agent** — most load skills at startup.
+
+> **Claude Code, read this.** Claude Code only loads skills from
+> `~/.claude/skills/`, `.claude/skills/`, or a plugin — **not** the CLI's default
+> universal `.agents/skills/` folder. So you must pass `--agent claude-code`
+> (as above), which installs to `~/.claude/skills/` (with `--global`) or
+> `.claude/skills/`. A bare `npx skills add …` puts it in `.agents/skills/`, where
+> Claude Code will never see it. Simplest of all for Claude Code: use the
+> [plugin](#3--the-claude-code-plugin-claude-code-only) — it registers the skill
+> natively and wires the MCP in one step.
 
 <details>
 <summary>Manual install (no CLI)</summary>
