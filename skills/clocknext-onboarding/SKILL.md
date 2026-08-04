@@ -114,7 +114,10 @@ Only after an explicit yes:
    onto the plan (this is the invoice-raising step — it must be the confirmed one).
 2. **Surf the codebase; meter every billable call.** For **each** call, list the real
    `agentKey`s (`list_credits`/`_outcomes`/`_units`) and **ask the user which one it maps to**
-   — never infer. Outcomes use the *step's* agentKey.
+   — never infer. Outcomes use the *step's* agentKey. **Write the integration the recipe way
+   (`references/code-metering.md`): one singleton client in async mode + `onError`, thin
+   per-meter helpers, one line each. Do NOT hand-roll a `mode:"sync"` + `try/catch` wrapper —
+   async mode already never throws to the caller and doesn't block the request.**
 3. Put the `cnk_` key in the server env.
 4. **Run-down test:** `clocknext_verify_signal` (dry run) → then, with a go-ahead, a real
    call → `clocknext_get_customer_usage` / `_balances` / `_unit_usage` to confirm it landed.

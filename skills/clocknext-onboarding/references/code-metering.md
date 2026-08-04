@@ -1,12 +1,61 @@
 # Metering the codebase
 
 ## SDK vs API (decide first, by inspecting the codebase)
-- **JS / TS codebase → `@clocknext/sdk`** — typed, with batching, retries, and idempotency
+- **JS / TS codebase → `@clocknext/sdk`** — typed, with buffering, retries, and idempotency
   built in.
 - **Any other language → the REST API** — `POST /api/v1/usage` for credit / outcome / wallet
   signals, `POST /api/v1/units` for unit events.
 Ground the exact call shapes in the docs first (`clocknext_search_docs kind=javascript` for
 JS/TS, `kind=api` otherwise).
+
+## The metering recipe — WRITE THIS, don't hand-roll a wrapper
+
+There is ONE correct integration shape. It's the same for credit, outcome, unit, and wallet.
+Produce this — do NOT invent a `mode:"sync"` + `try/catch` wrapper (that reinvents what the
+SDK already does and blocks every request). Full page for the human:
+`clocknext_get_doc` → `/docs/sdk/metering-recipe`.
+
+### 1. One singleton client — **async mode + `onError`**
+Async is the default: fire-and-forget, non-blocking, retried, and it routes failures to
+`onError` — **never to the caller**. So there is nothing to `try/catch`, and no blocking hop.
+
+```ts
+// clocknext.ts
+import { ClockNext } from "@clocknext/sdk";
+let client: ClockNext | undefined;
+export const meteringEnabled = Boolean(process.env.CLOCKNEXT_API_KEY);
+export function clocknext(): ClockNext | undefined {
+  if (!meteringEnabled) return undefined;
+  client ??= new ClockNext({
+    apiKey: process.env.CLOCKNEXT_API_KEY!,
+    onError: (err, signal) => logger.warn({ err, type: signal?.type }, "clocknext metering failed"),
+  });
+  return client;
+}
+export const shutdownMetering = () => client?.close().catch(() => {}); // call on SIGTERM
+```
+
+### 2. Thin, domain-named helpers — one per meter, agentKeys as constants
+No `await`-blocking, no `try/catch`. Address each meter by the **exact agentKey** (see the
+agentKey rule below). One line each:
+
+```ts
+const KEYS = { chat: "pro_credit", review: "review.analyse", seat: "seats" } as const;
+
+export const meterChat  = (customerId, model, t) => clocknext()?.signals.credit({ customerId, model, agentKey: KEYS.chat, tokens: t });
+export const meterStep  = (customerId, model, t) => clocknext()?.signals.outcome({ customerId, model, agentKey: KEYS.review, tokens: t }); // outcome = the STEP key
+export const meterWallet= (customerId, model, t) => clocknext()?.signals.wallet({ customerId, model, tokens: t });                        // USD at cost, no margin
+export const meterSeat  = (customerId)           => clocknext()?.signals.unit({ customerId, agentKey: KEYS.seat });                       // one event, no tokens
+```
+
+Call them on the **server**, at the billable boundary, **after** the work succeeds.
+
+### 3. When (and only when) to deviate
+- **Gate a request on balance** (reject when out of allowance) → that call uses `{ wait: true }`
+  and reads `res.usageLog`, or catches the typed `AllowanceError`. This is the ONLY reason to
+  block on a send.
+- **Preflight** before real traffic → `cnk.signals.verify(signal)` (dry run, records nothing).
+- **At-least-once** (queues/your own retries) → pass your own stable `idempotencyKey`.
 
 ## The agentKey rule (human-in-the-loop — do NOT get this wrong)
 Every credit/outcome signal carries an `agentKey` that must **exactly match** a created
@@ -23,10 +72,8 @@ Meter units where the *event* happens in the customer's product — `signals.uni
 (SDK) or `POST /api/v1/units` (REST). One call = one unit: no tokens, no model. This is the
 product's runtime job, **not** the MCP's — the MCP only builds the catalogue.
 
-## Reliability & safety
-- Reuse a stable **`idempotencyKey`** per logical event so retries never double-bill (the SDK
-  auto-generates one; pass your own wherever the code has a natural request id).
-- Keep the `cnk_` key **server-side** (env / secret store) — never ship it to the client,
-  never commit it.
+## Safety
+- Keep the `cnk_` key **server-side** (env / secret store) — never client-side, never committed.
 - Meter on the **billable boundary** (the real model/API call), not on UI events.
 - Send signals from the **server**, after the work succeeds.
+- Wire `shutdownMetering()` into graceful shutdown so buffered signals aren't lost on deploy.
