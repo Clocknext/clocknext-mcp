@@ -21344,7 +21344,7 @@ function computeBackoff(attempt, opts, retryAfterMs, rand = Math.random) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-var SDK_VERSION = "0.5.0";
+var SDK_VERSION = "0.6.0";
 var Transport = class {
   constructor(cfg) {
     this.cfg = cfg;
@@ -22270,12 +22270,12 @@ function errMsg(err) {
 
 // src/tools/add-model.ts
 var DEFAULT_BASE = "https://payments.clocknext.com";
-function registerAddModel(server) {
+function registerAddModel(server, cnk) {
   server.registerTool(
     "clocknext_add_model",
     {
       title: "ClockNext: add (enable) a model",
-      description: "Enable a model for the organisation so usage can be metered against it \u2014 afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. AUTOPRICED: give only the `provider` and `model` (its catalog id) and ClockNext copies that model's input/output/cache prices from its pricing catalog \u2014 you never set prices here. Fails cleanly if the model isn't in the catalog or is already enabled, so check clocknext_list_models first.",
+      description: "Enable a model for the organisation so usage can be metered against it \u2014 afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. Only models in ClockNext's pricing catalog can be added, AUTOPRICED: give the `provider` and `model` (its catalog id) and ClockNext copies that model's input/output/cache prices from the catalog \u2014 you never set prices here. If the catalog has no price for it, the model is still enabled but meters at $0, and you must set its price manually on the Models page (the tool returns that link and a `warning`). A model or provider that isn't in the catalog can't be added \u2014 check clocknext_list_models first.",
       inputSchema: {
         provider: external_exports.string().min(1).describe(
           "The model's provider slug in the ClockNext catalog, e.g. 'openai', 'anthropic', 'google'."
@@ -22292,6 +22292,7 @@ function registerAddModel(server) {
         return errorResult("CLOCKNEXT_API_KEY is not set \u2014 cannot add a model.");
       }
       const base = (process.env.CLOCKNEXT_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
+      const modelsPage = `${base}/settings/models`;
       try {
         const res = await fetch(new URL("/api/v1/models", base), {
           method: "POST",
@@ -22305,11 +22306,36 @@ function registerAddModel(server) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
+          const reason = json.statusDetail?.message || json.error || json.message || `HTTP ${res.status}`;
           return errorResult(
-            json.error || json.message || `HTTP ${res.status} enabling the model.`
+            `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. See the available models with clocknext_list_models, or manage models on the Models page: ${modelsPage}`
           );
         }
-        return jsonResult({ ok: true, provider, model, ...json });
+        const added = await cnk.workspace.models({}).then((list) => list.find((m) => m.modelId === model)).catch(() => void 0);
+        const unpriced = added != null && added.inputPrice === 0 && added.outputPrice === 0 && added.cachePrice === 0;
+        if (unpriced) {
+          return jsonResult({
+            ok: true,
+            provider,
+            model,
+            priced: false,
+            warning: `"${model}" is enabled but has NO price in the catalog \u2014 usage will meter at $0. Set its input/output/cache pricing on the Models page: ${modelsPage}`,
+            modelsPage
+          });
+        }
+        return jsonResult({
+          ok: true,
+          provider,
+          model,
+          priced: added != null ? true : void 0,
+          ...added ? {
+            prices: {
+              input: added.inputPrice,
+              output: added.outputPrice,
+              cache: added.cachePrice
+            }
+          } : {}
+        });
       } catch (err) {
         return errorResult(errMsg(err));
       }
@@ -23037,7 +23063,7 @@ async function main() {
   registerGetDoc(server);
   registerCatalogueTools(server, cnk);
   registerCustomerTools(server, cnk);
-  registerAddModel(server);
+  registerAddModel(server, cnk);
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");
 }

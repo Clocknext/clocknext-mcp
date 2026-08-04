@@ -32,7 +32,7 @@ async function main(): Promise<void> {
   registerGetDoc(server); // reads a full docs page; also no API key needed
   registerCatalogueTools(server, cnk); // CRUD for plans/credits/outcomes/units
   registerCustomerTools(server, cnk); // customers, purchases, bulk import
-  registerAddModel(server); // enable a model (autopriced) via undocumented v1 route
+  registerAddModel(server, cnk); // enable a model (autopriced); reads price back to warn on $0
 
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");
