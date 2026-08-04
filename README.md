@@ -116,7 +116,7 @@ env:     CLOCKNEXT_API_KEY=cnk_your_key
 ```
 
 > `@clocknext/mcp` is listed in the official [MCP Registry](https://modelcontextprotocol.io/registry/about)
-> as `io.github.clocknext/mcp`, so registry‑aware clients can discover it directly.
+> as `io.github.ClockNext/mcp`, so registry‑aware clients can discover it directly.
 
 ### Environment
 
@@ -209,7 +209,7 @@ and commit it on any code change.
 ### Publishing to the official MCP Registry (maintainers)
 
 `server.json` (repo root) is the registry metadata; `package.json` carries the
-matching `mcpName: io.github.clocknext/mcp` that proves ownership. To publish a new
+matching `mcpName: io.github.ClockNext/mcp` that proves ownership. To publish a new
 version:
 
 ```bash

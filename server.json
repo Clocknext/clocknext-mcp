@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.clocknext/mcp",
+  "name": "io.github.ClockNext/mcp",
   "description": "Meter usage and manage usage-based billing from AI tools via the ClockNext API.",
   "repository": {
     "url": "https://github.com/ClockNext/clocknext-mcp",
     "source": "github"
   },
-  "version": "0.5.1",
+  "version": "0.5.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@clocknext/mcp",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "transport": {
         "type": "stdio"
       },

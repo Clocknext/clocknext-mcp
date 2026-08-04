@@ -12,3 +12,6 @@
 # misc
 .DS_Store
 npm-debug.log*
+
+# local MCP registry publisher binary (not committed)
+mcp-publisher
