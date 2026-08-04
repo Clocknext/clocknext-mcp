@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.clocknext/mcp",
+  "description": "Meter usage and manage usage-based billing from AI tools via the ClockNext API.",
+  "repository": {
+    "url": "https://github.com/ClockNext/clocknext-mcp",
+    "source": "github"
+  },
+  "version": "0.5.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@clocknext/mcp",
+      "version": "0.5.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CLOCKNEXT_API_KEY",
+          "description": "Your organisation's cnk_… API key (Settings → API Keys).",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "CLOCKNEXT_BASE_URL",
+          "description": "Override the API origin (e.g. a staging URL). Defaults to production.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "CLOCKNEXT_DOCS_URL",
+          "description": "Override the docs origin for the search_docs/get_doc tools. Defaults to https://help.clocknext.com.",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
