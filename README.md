@@ -78,16 +78,11 @@ point their rules file at `skills/clocknext-onboarding/SKILL.md` — e.g.
 
 ## 2 — The MCP server (every AI coding agent)
 
-Gives you the **tools** the skill (and you) call. Works in any MCP client via
-`npx -y @clocknext/mcp`. You supply `CLOCKNEXT_API_KEY`.
+Gives you the **tools** the skill (and you) call — one stdio server,
+`npx -y @clocknext/mcp`, with your `CLOCKNEXT_API_KEY` in its env.
 
-**Claude Code** (CLI):
-
-```bash
-claude mcp add clocknext --env CLOCKNEXT_API_KEY=cnk_your_key -- npx -y @clocknext/mcp
-```
-
-**Cursor** — `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+Most clients take the **standard block** below — same JSON, they just differ on
+the file it goes in:
 
 ```json
 {
@@ -101,12 +96,83 @@ claude mcp add clocknext --env CLOCKNEXT_API_KEY=cnk_your_key -- npx -y @clockne
 }
 ```
 
-**Windsurf** — `~/.codeium/windsurf/mcp_config.json`: same `mcpServers` block as
-Cursor above.
+### CLI agents
 
-**Antigravity** — its MCP settings JSON: same `mcpServers` block as Cursor.
+**Claude Code** — one command:
 
-**VS Code** (native MCP / Copilot) — `.vscode/mcp.json`:
+```bash
+claude mcp add clocknext --env CLOCKNEXT_API_KEY=cnk_your_key -- npx -y @clocknext/mcp
+```
+
+**Gemini CLI** — `~/.gemini/settings.json` → the **standard block**.
+
+**Codex** — `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.clocknext]
+command = "npx"
+args = ["-y", "@clocknext/mcp"]
+env = { CLOCKNEXT_API_KEY = "cnk_your_key" }
+```
+
+**GitHub Copilot CLI** — `copilot mcp add`, or `~/.copilot/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "clocknext": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@clocknext/mcp"],
+      "env": { "CLOCKNEXT_API_KEY": "cnk_your_key" },
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+**OpenCode** — `~/.config/opencode/opencode.json` (note: `mcp` root, `command`
+is an array, env is `environment`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "clocknext": {
+      "type": "local",
+      "command": ["npx", "-y", "@clocknext/mcp"],
+      "environment": { "CLOCKNEXT_API_KEY": "cnk_your_key" },
+      "enabled": true
+    }
+  }
+}
+```
+
+**Factory (Droid)** — `droid mcp add`, or the **standard block** in its config
+with `"type": "stdio"` added to the server:
+
+```bash
+droid mcp add --type stdio clocknext "npx -y @clocknext/mcp"
+```
+
+**Kimi Code** — `kimi mcp add clocknext -- npx -y @clocknext/mcp` (set
+`CLOCKNEXT_API_KEY` in the environment; config lives in `~/.kimi/config.toml`).
+
+### IDEs
+
+**Cursor** — `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global) → the
+**standard block**.
+
+**Windsurf** — `~/.codeium/windsurf/mcp_config.json` → the **standard block**.
+
+**Antigravity** — its MCP settings JSON → the **standard block**.
+
+**Kiro** — `.kiro/settings/mcp.json` (project) or `~/.kiro/settings/mcp.json`
+(user) → the **standard block**. Kiro doesn't inherit your shell `PATH`, so if
+`npx` isn't found, use its full path (`which npx`).
+
+**VS Code** (native MCP / Copilot) — `.vscode/mcp.json` (uses `servers`, not
+`mcpServers`):
 
 ```json
 {
@@ -121,27 +187,10 @@ Cursor above.
 }
 ```
 
-**Codex** — `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.clocknext]
-command = "npx"
-args = ["-y", "@clocknext/mcp"]
-env = { CLOCKNEXT_API_KEY = "cnk_your_key" }
-```
-
-**Gemini CLI** — `~/.gemini/settings.json`: same `mcpServers` block as Cursor.
-
-**Any other MCP client** — point it at this stdio command:
-
-```
-command: npx
-args:    -y @clocknext/mcp
-env:     CLOCKNEXT_API_KEY=cnk_your_key
-```
-
-> `@clocknext/mcp` is listed in the official [MCP Registry](https://modelcontextprotocol.io/registry/about)
-> as `io.github.ClockNext/mcp`, so registry‑aware clients can discover it directly.
+**Any other MCP client** — point it at the stdio command `npx -y @clocknext/mcp`
+with `CLOCKNEXT_API_KEY` in env. `@clocknext/mcp` is also in the official
+[MCP Registry](https://modelcontextprotocol.io/registry/about) as
+`io.github.ClockNext/mcp`, so registry‑aware clients can discover it directly.
 
 ### Environment
 
