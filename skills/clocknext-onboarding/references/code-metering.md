@@ -12,8 +12,7 @@ JS/TS, `kind=api` otherwise).
 
 There is ONE correct integration shape. It's the same for credit, outcome, unit, and wallet.
 Produce this — do NOT invent a `mode:"sync"` + `try/catch` wrapper (that reinvents what the
-SDK already does and blocks every request). Full page for the human:
-`clocknext_get_doc` → `/docs/sdk/metering-recipe`.
+SDK already does and blocks every request).
 
 ### 1. One singleton client — **async mode + `onError`**
 Async is the default: fire-and-forget, non-blocking, retried, and it routes failures to
