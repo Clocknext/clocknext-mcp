@@ -106,12 +106,16 @@ const creditInput: z.ZodRawShape = {
   agentKey: z
     .string()
     .describe(
-      "Lowercased stable key your code passes to signals.credit({ agentKey }). The credit's durable identity.",
+      "Lowercased stable key you report credit usage against (sent as `agentKey` when recording usage). The credit's durable identity.",
     ),
-  basePrice: z.number().describe("Base cost per credit before margin."),
-  marginPercent: z.number().describe("Margin percent applied over basePrice."),
-  pricePerCredit: z.number().describe("Final price charged per credit."),
-  description: z.string().optional(),
+  basePrice: z.number().describe("Raw cost per credit before markup."),
+  marginPercent: z.number().describe("Markup applied over basePrice, as a percent (0–300)."),
+  pricePerCredit: z
+    .number()
+    .describe(
+      "The price actually charged per credit — the marked-up total, i.e. basePrice × (1 + marginPercent/100). Stored as given; the server does NOT recompute it, so keep it consistent with basePrice + marginPercent.",
+    ),
+  description: z.string().optional().describe("Optional human-readable description."),
   tokensPerCredit: z
     .number()
     .optional()
@@ -121,18 +125,22 @@ const creditInput: z.ZodRawShape = {
 
 const outcomeInput: z.ZodRawShape = {
   name: z.string().describe("Outcome name."),
-  basePrice: z.number().describe("Base cost per outcome before margin."),
-  marginPercent: z.number().describe("Margin percent applied over basePrice."),
-  pricePerOutcome: z.number().describe("Final price charged per completed outcome."),
-  description: z.string().nullish(),
-  isActive: z.boolean().optional(),
+  basePrice: z.number().describe("Raw cost per completed outcome before markup."),
+  marginPercent: z.number().describe("Markup applied over basePrice, as a percent (0–300)."),
+  pricePerOutcome: z
+    .number()
+    .describe(
+      "The price actually charged per completed outcome — the marked-up total, i.e. basePrice × (1 + marginPercent/100). Stored as given; the server does NOT recompute it, so keep it consistent with basePrice + marginPercent.",
+    ),
+  description: z.string().nullish().describe("Optional human-readable description."),
+  isActive: z.boolean().optional().describe("Whether the outcome is active/sellable."),
   steps: z
     .array(
       z.object({
         name: z.string().describe("Step name (unique within the outcome)."),
         agentKey: z
           .string()
-          .describe("Lowercased stable key your code passes to signals.outcome({ agentKey })."),
+          .describe("Lowercased stable key you report this outcome step against (sent as `agentKey` when recording usage)."),
         basePrice: z.number().describe("Base price for this step."),
         modelBundle,
       }),
@@ -147,7 +155,7 @@ const unitInput: z.ZodRawShape = {
   agentKey: z
     .string()
     .describe(
-      "Lowercased stable key consumption is reported against (signals.unit({ agentKey })). The unit's durable identity — unique org-wide, chars [a-z0-9._-]; a rename never changes it.",
+      "Lowercased stable key consumption is reported against (sent as `agentKey` when recording unit usage). The unit's durable identity — unique org-wide, chars [a-z0-9._-]; a rename never changes it.",
     ),
   pricingType: z
     .enum(["FLAT", "SLAB", "VOLUME"])
@@ -158,8 +166,8 @@ const unitInput: z.ZodRawShape = {
     .max(50)
     .optional()
     .describe("SLAB/VOLUME only: 1–50 tiers, ordered; only the last may have upTo:null."),
-  description: z.string().nullish(),
-  isActive: z.boolean().optional(),
+  description: z.string().nullish().describe("Optional human-readable description."),
+  isActive: z.boolean().optional().describe("Whether the unit is active/sellable."),
 };
 
 // ---------- the CRUD factory ----------
@@ -272,7 +280,7 @@ function registerCrud(
     {
       title: `ClockNext: archive ${resource}`,
       description: desc.archive,
-      inputSchema: { id: z.string().describe(`The ${resource} id to archive (deactivate).`) },
+      inputSchema: { id: z.string().describe(`The ${resource} id to deactivate (soft-archive — reversible, not a delete).`) },
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -313,7 +321,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
       update:
         "Replace a plan by id with a COMPLETE new definition (same shape as create — a full rewrite, not a patch; omitted fields are dropped). Changes the plan going forward; customers already on it keep their terms. Read it first with clocknext_get_plan, edit, then send the whole thing back.",
       archive:
-        "Archive (deactivate) a plan by id — it becomes unsellable, existing customers are unaffected. Reversible (set isActive:true via update). Does NOT hard-delete.",
+        "Deactivate a plan in your catalogue (sets isActive→false) — ClockNext's soft archive, NOT a delete. The plan and its history are kept and customers already on it are unaffected; it simply becomes unsellable and drops out of active lists. Reversible: reactivate via clocknext_update_plan with isActive:true (a full rewrite) — there is no separate un-archive tool. Use ONLY to retire a plan you no longer sell. This does NOT delete anything and is unrelated to cancelling a customer's purchase or ending a subscription.",
     },
   });
 
@@ -332,11 +340,11 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
       list: "List the organisation's credit types (id, name, agentKey, price, active). Use it to find a credit id to reference from a plan's CREDIT component.",
       get: "Get one credit type in full by id — pricing, token mapping and active state.",
       create:
-        "Create a credit type: a named entitlement your code draws down via signals.credit({ agentKey }). `agentKey` is the lowercased stable key that ties runtime signals to this credit. Priced as basePrice + marginPercent → pricePerCredit; optionally map LLM tokens to credits (tokensPerCredit + per-model modelBundle). A plan grants it via a CREDIT component referencing this credit's id. (Returns ok with no body — list credits to see the new id.)",
+        "Create a credit type: a named entitlement your product draws down by recording credit usage against its `agentKey`. `agentKey` is the lowercased stable key that ties runtime usage to this credit. Priced as basePrice + marginPercent → pricePerCredit; optionally map LLM tokens to credits (tokensPerCredit + per-model modelBundle). A plan grants it via a CREDIT component referencing this credit's id. (Returns ok with no body — list credits to see the new id.)",
       update:
-        "Replace a credit type by id with a complete new definition (full rewrite, same shape as create). Changing `agentKey` re-points which runtime signals map here — do it deliberately.",
+        "Replace a credit by id with its COMPLETE new definition — a full rewrite, NOT a partial patch: any optional field you omit (description, tokensPerCredit, modelBundle) is CLEARED, not left as-is. Read the current credit with clocknext_get_credit first, change what you need, then send the whole object back. Changing `agentKey` re-points which runtime signals map here — do it deliberately.",
       archive:
-        "Archive (deactivate) a credit type by id. Reversible; does NOT hard-delete. Plans still referencing it should be updated.",
+        "Deactivate a credit TYPE in your catalogue (sets isActive→false) — ClockNext's soft archive, NOT a delete. The credit and its history are kept; recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it). It simply can't be added to new plans and drops out of active lists. Reversible: reactivate via clocknext_update_credit with isActive:true (a full rewrite) — there is no separate un-archive tool. Use ONLY to retire a credit you no longer sell. This does NOT delete anything and is unrelated to archiving a customer, ending a purchase, or clearing a balance.",
     },
   });
 
@@ -355,11 +363,11 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
       list: "List the organisation's outcome types (id, name, price, active). Use it to find an outcome id to reference from a plan's OUTCOME component.",
       get: "Get one outcome type in full by id — its steps plus in-flight/completed stats.",
       create:
-        "Create an outcome type: a multi-step deliverable billed per COMPLETED outcome. It has 1–50 `steps`, each with its own lowercased agentKey (used by signals.outcome({ agentKey })) and basePrice. Priced basePrice + marginPercent → pricePerOutcome. A plan grants it via an OUTCOME component referencing this outcome's id.",
+        "Create an outcome type: a multi-step deliverable billed per COMPLETED outcome. It has 1–50 `steps`, each with its own lowercased agentKey (the key you report that step against when recording usage) and basePrice. Priced basePrice + marginPercent → pricePerOutcome. A plan grants it via an OUTCOME component referencing this outcome's id.",
       update:
-        "Replace an outcome type by id with a complete new definition (full rewrite, same shape as create). Step agent keys are the runtime binding — change them deliberately.",
+        "Replace an outcome by id with its COMPLETE new definition — a full rewrite, NOT a partial patch: any field you omit (including steps you leave out) is DROPPED, not left as-is. Read the current outcome with clocknext_get_outcome first, edit, then send the whole object back. Step agent keys are the runtime binding — change them deliberately.",
       archive:
-        "Archive (deactivate) an outcome type by id. Reversible; does NOT hard-delete.",
+        "Deactivate an outcome TYPE in your catalogue (sets isActive→false) — ClockNext's soft archive, NOT a delete. The outcome, its steps, and any in-flight or completed history are kept; existing plans and outcomes already in progress are unaffected. It simply can't be added to new plans and drops out of active lists. Reversible: reactivate via clocknext_update_outcome with isActive:true (a full rewrite) — there is no separate un-archive tool. Use ONLY to retire an outcome you no longer sell. This does NOT delete anything and is unrelated to archiving a customer or ending a purchase.",
     },
   });
 
@@ -378,10 +386,11 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
       list: "List the organisation's unit types (id, name, pricing type, active). Use it to find a unit id to reference from a plan's UNIT component.",
       get: "Get one unit type in full by id — pricing type, flat price or tiers, plus usage stats.",
       create:
-        "Create a unit type: a metered usage unit reported against a lowercased stable `agentKey` (signals.unit({ agentKey })) — its durable identity, unique org-wide. Price it FLAT (a single `flatPrice` per event, default 0) or tiered — pricingType SLAB or VOLUME with `tiers` (1–50, ordered; only the last tier may have upTo:null). A plan meters it via a UNIT component referencing this unit's id.",
+        "Create a unit type: a metered usage unit reported against a lowercased stable `agentKey` (the key you send when recording unit usage) — its durable identity, unique org-wide. Price it FLAT (a single `flatPrice` per event, default 0) or tiered — pricingType SLAB or VOLUME with `tiers` (1–50, ordered; only the last tier may have upTo:null). A plan meters it via a UNIT component referencing this unit's id.",
       update:
-        "Replace a unit type by id with a complete new definition (full rewrite, same shape as create, including `agentKey`). Changing `agentKey` re-points which runtime signals map here — do it deliberately.",
-      archive: "Archive (deactivate) a unit type by id. Reversible; does NOT hard-delete.",
+        "Replace a unit by id with its COMPLETE new definition — a full rewrite, NOT a partial patch: any optional field you omit (description, tiers, flatPrice) is CLEARED, not left as-is. Read the current unit with clocknext_get_unit first, edit, then send the whole object back. Changing `agentKey` re-points which runtime signals map here — do it deliberately.",
+      archive:
+        "Deactivate a unit TYPE in your catalogue (sets isActive→false) — ClockNext's soft archive, NOT a delete. The unit and its recorded usage are kept; existing plans metering it keep working. It simply can't be added to new plans and drops out of active lists. Reversible: reactivate via clocknext_update_unit with isActive:true (a full rewrite) — there is no separate un-archive tool. Use ONLY to retire a unit you no longer sell. This does NOT delete anything and is unrelated to archiving a customer or ending a purchase.",
     },
   });
 }

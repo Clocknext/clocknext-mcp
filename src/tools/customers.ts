@@ -22,7 +22,7 @@ const customerFields = {
     .string()
     .min(1)
     .describe("Primary email — required, and the key bulk import matches back on."),
-  description: z.string().nullish(),
+  description: z.string().nullish().describe("Optional freeform description of the customer."),
   website: z.string().nullish().describe("The customer's website."),
   phone: z.string().nullish(),
   legalName: z.string().nullish(),
@@ -33,9 +33,8 @@ const customerFields = {
   country: z.string().nullish(),
   pincode: z.string().nullish(),
   taxId: z.string().nullish(),
-  notes: z.string().nullish(),
+  notes: z.string().nullish().describe("Internal notes about the customer."),
   logoUrl: z.string().nullish(),
-  creditAllowance: z.number().optional(),
   currencyCode: z
     .string()
     .optional()
@@ -180,7 +179,7 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
           .string()
           .optional()
           .describe("YYYY-MM-DD. Defaults to today; must be a valid, non-past date."),
-        notes: z.string().optional(),
+        notes: z.string().optional().describe("Internal notes for this purchase."),
         autoPayment: z.boolean().optional().describe("Charge automatically when the invoice is due."),
         voidAfterMinutes: z
           .number()

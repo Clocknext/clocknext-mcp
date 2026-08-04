@@ -21344,7 +21344,7 @@ function computeBackoff(attempt, opts, retryAfterMs, rand = Math.random) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-var SDK_VERSION = "0.4.0";
+var SDK_VERSION = "0.5.0";
 var Transport = class {
   constructor(cfg) {
     this.cfg = cfg;
@@ -21452,13 +21452,14 @@ var Credits = class {
     });
     return res.credits;
   }
-  /** Create a credit type. `POST /api/v1/credits`. */
+  /** Create a credit type; returns the created credit. `POST /api/v1/credits`. */
   async create(input) {
-    await this.transport.request({
+    const res = await this.transport.request({
       method: "POST",
       path: "/api/v1/credits",
       body: input
     });
+    return res.credit;
   }
   /** Fetch one credit type with usage stats. `GET /api/v1/credits/:id`. */
   async get(id) {
@@ -21468,13 +21469,14 @@ var Credits = class {
     });
     return res.credit;
   }
-  /** Update a credit type's definition. `PATCH /api/v1/credits/:id`. */
+  /** Update a credit type's definition; returns the updated credit. `PATCH /api/v1/credits/:id`. */
   async update(id, input) {
-    await this.transport.request({
+    const res = await this.transport.request({
       method: "PATCH",
       path: `/api/v1/credits/${encodeURIComponent(id)}`,
       body: input
     });
+    return res.credit;
   }
   /** Activate or deactivate a credit type. */
   async setActive(id, isActive) {
@@ -21552,12 +21554,12 @@ var Customers = class {
       path: `/api/v1/customers/${encodeURIComponent(id)}`
     });
   }
-  /** A customer's usage history. `GET /api/v1/customers/:id/usage`. */
+  /** A customer's usage history. `GET /api/v1/usage?customerId=`. */
   async usage(id, params = {}) {
     const res = await this.transport.request({
       method: "GET",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/usage`,
-      query: { limit: params.limit }
+      path: `/api/v1/usage`,
+      query: { customerId: id, limit: params.limit }
     });
     return { customer: res.customer, totals: res.totals, logs: res.logs };
   }
@@ -21568,19 +21570,42 @@ var Customers = class {
       path: `/api/v1/customers/${encodeURIComponent(id)}/balances`
     });
   }
+  /**
+   * One credit balance for a customer, matched by `creditId` or `creditName`;
+   * `null` when the customer has no plan or no matching credit. Convenience
+   * over `balances()` + `Array.find` — it fetches the FULL balances under the
+   * hood (there is no server-side scoped read), so prefer `balances()` when you
+   * need several rows from the same customer.
+   */
+  async creditBalance(customerId, match) {
+    const { credits } = await this.balances(customerId);
+    return credits.find(
+      (c) => match.creditId != null && c.creditId === match.creditId || match.creditName != null && c.creditName === match.creditName
+    ) ?? null;
+  }
+  /** One outcome balance for a customer, matched by `outcomeId` or
+   *  `outcomeName`; `null` when absent. See {@link creditBalance} for the
+   *  fetch-then-filter caveat. */
+  async outcomeBalance(customerId, match) {
+    const { outcomes } = await this.balances(customerId);
+    return outcomes.find(
+      (o) => match.outcomeId != null && o.outcomeId === match.outcomeId || match.outcomeName != null && o.outcomeName === match.outcomeName
+    ) ?? null;
+  }
+  /** One unit balance for a customer, matched by `unitId` or `unitName`;
+   *  `null` when absent. See {@link creditBalance} for the fetch-then-filter
+   *  caveat. */
+  async unitBalance(customerId, match) {
+    const { units } = await this.balances(customerId);
+    return units.find(
+      (u) => match.unitId != null && u.unitId === match.unitId || match.unitName != null && u.unitName === match.unitName
+    ) ?? null;
+  }
   /** The customer's current plan. `GET …/:id/plan`. */
   plan(id) {
     return this.transport.request({
       method: "GET",
       path: `/api/v1/customers/${encodeURIComponent(id)}/plan`
-    });
-  }
-  /** Revenue / cost / profit / margin over a window. `GET …/:id/revenue`. */
-  revenue(id, params = {}) {
-    return this.transport.request({
-      method: "GET",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/revenue`,
-      query: { range: params.range }
     });
   }
   // --- Members -------------------------------------------------------------
@@ -21744,13 +21769,14 @@ var Outcomes = class {
     });
     return res.outcome;
   }
-  /** Activate or deactivate an outcome type. */
+  /** Activate or deactivate an outcome type; returns the updated outcome. */
   async setActive(id, isActive) {
-    await this.transport.request({
+    const res = await this.transport.request({
       method: "PATCH",
       path: `/api/v1/outcomes/${encodeURIComponent(id)}`,
       body: { isActive }
     });
+    return res.outcome;
   }
   /** Delete an outcome type. */
   async delete(id) {
@@ -22335,26 +22361,30 @@ var planInput = {
 var creditInput = {
   name: external_exports.string().describe("Credit name."),
   agentKey: external_exports.string().describe(
-    "Lowercased stable key your code passes to signals.credit({ agentKey }). The credit's durable identity."
+    "Lowercased stable key you report credit usage against (sent as `agentKey` when recording usage). The credit's durable identity."
   ),
-  basePrice: external_exports.number().describe("Base cost per credit before margin."),
-  marginPercent: external_exports.number().describe("Margin percent applied over basePrice."),
-  pricePerCredit: external_exports.number().describe("Final price charged per credit."),
-  description: external_exports.string().optional(),
+  basePrice: external_exports.number().describe("Raw cost per credit before markup."),
+  marginPercent: external_exports.number().describe("Markup applied over basePrice, as a percent (0\u2013300)."),
+  pricePerCredit: external_exports.number().describe(
+    "The price actually charged per credit \u2014 the marked-up total, i.e. basePrice \xD7 (1 + marginPercent/100). Stored as given; the server does NOT recompute it, so keep it consistent with basePrice + marginPercent."
+  ),
+  description: external_exports.string().optional().describe("Optional human-readable description."),
   tokensPerCredit: external_exports.number().optional().describe("If this credit meters LLM tokens: how many tokens equal one credit."),
   modelBundle
 };
 var outcomeInput = {
   name: external_exports.string().describe("Outcome name."),
-  basePrice: external_exports.number().describe("Base cost per outcome before margin."),
-  marginPercent: external_exports.number().describe("Margin percent applied over basePrice."),
-  pricePerOutcome: external_exports.number().describe("Final price charged per completed outcome."),
-  description: external_exports.string().nullish(),
-  isActive: external_exports.boolean().optional(),
+  basePrice: external_exports.number().describe("Raw cost per completed outcome before markup."),
+  marginPercent: external_exports.number().describe("Markup applied over basePrice, as a percent (0\u2013300)."),
+  pricePerOutcome: external_exports.number().describe(
+    "The price actually charged per completed outcome \u2014 the marked-up total, i.e. basePrice \xD7 (1 + marginPercent/100). Stored as given; the server does NOT recompute it, so keep it consistent with basePrice + marginPercent."
+  ),
+  description: external_exports.string().nullish().describe("Optional human-readable description."),
+  isActive: external_exports.boolean().optional().describe("Whether the outcome is active/sellable."),
   steps: external_exports.array(
     external_exports.object({
       name: external_exports.string().describe("Step name (unique within the outcome)."),
-      agentKey: external_exports.string().describe("Lowercased stable key your code passes to signals.outcome({ agentKey })."),
+      agentKey: external_exports.string().describe("Lowercased stable key you report this outcome step against (sent as `agentKey` when recording usage)."),
       basePrice: external_exports.number().describe("Base price for this step."),
       modelBundle
     })
@@ -22363,13 +22393,13 @@ var outcomeInput = {
 var unitInput = {
   name: external_exports.string().describe("Unit name."),
   agentKey: external_exports.string().describe(
-    "Lowercased stable key consumption is reported against (signals.unit({ agentKey })). The unit's durable identity \u2014 unique org-wide, chars [a-z0-9._-]; a rename never changes it."
+    "Lowercased stable key consumption is reported against (sent as `agentKey` when recording unit usage). The unit's durable identity \u2014 unique org-wide, chars [a-z0-9._-]; a rename never changes it."
   ),
   pricingType: external_exports.enum(["FLAT", "SLAB", "VOLUME"]).describe("FLAT = a single per-event price; SLAB/VOLUME = tiered pricing."),
   flatPrice: external_exports.number().optional().describe("FLAT only: price per event. Defaults to 0."),
   tiers: external_exports.array(unitTier).max(50).optional().describe("SLAB/VOLUME only: 1\u201350 tiers, ordered; only the last may have upTo:null."),
-  description: external_exports.string().nullish(),
-  isActive: external_exports.boolean().optional()
+  description: external_exports.string().nullish().describe("Optional human-readable description."),
+  isActive: external_exports.boolean().optional().describe("Whether the unit is active/sellable.")
 };
 function registerCrud(server, opts) {
   const { resource, plural, api, input, desc } = opts;
@@ -22454,7 +22484,7 @@ function registerCrud(server, opts) {
     {
       title: `ClockNext: archive ${resource}`,
       description: desc.archive,
-      inputSchema: { id: external_exports.string().describe(`The ${resource} id to archive (deactivate).`) },
+      inputSchema: { id: external_exports.string().describe(`The ${resource} id to deactivate (soft-archive \u2014 reversible, not a delete).`) },
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -22489,7 +22519,7 @@ function registerCatalogueTools(server, cnk) {
       get: "Get one plan in full by id \u2014 its entitlement components (wallet/credit/outcome/unit/flat), billing cycle, currency and active state.",
       create: "Create a billing plan. A plan bundles one or more entitlement `components`: WALLET (prepaid USD balance), FLAT (one-off fee), or CREDIT/OUTCOME/UNIT entitlements that reference an existing credit/outcome/unit BY ID \u2014 so create those first (clocknext_create_credit / _outcome / _unit) and list them to get ids. Each component has a billingMode: ADVANCE (up-front, needs amount/quantity) or ARREAR (metered). FREE plans must be ADVANCE-only with no FLAT component. If a term is unclear, clocknext_search_docs kind=concept first. This creates a real, sellable plan \u2014 get the pricing right before you create it.",
       update: "Replace a plan by id with a COMPLETE new definition (same shape as create \u2014 a full rewrite, not a patch; omitted fields are dropped). Changes the plan going forward; customers already on it keep their terms. Read it first with clocknext_get_plan, edit, then send the whole thing back.",
-      archive: "Archive (deactivate) a plan by id \u2014 it becomes unsellable, existing customers are unaffected. Reversible (set isActive:true via update). Does NOT hard-delete."
+      archive: "Deactivate a plan in your catalogue (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete. The plan and its history are kept and customers already on it are unaffected; it simply becomes unsellable and drops out of active lists. Reversible: reactivate via clocknext_update_plan with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool. Use ONLY to retire a plan you no longer sell. This does NOT delete anything and is unrelated to cancelling a customer's purchase or ending a subscription."
     }
   });
   registerCrud(server, {
@@ -22506,9 +22536,9 @@ function registerCatalogueTools(server, cnk) {
     desc: {
       list: "List the organisation's credit types (id, name, agentKey, price, active). Use it to find a credit id to reference from a plan's CREDIT component.",
       get: "Get one credit type in full by id \u2014 pricing, token mapping and active state.",
-      create: "Create a credit type: a named entitlement your code draws down via signals.credit({ agentKey }). `agentKey` is the lowercased stable key that ties runtime signals to this credit. Priced as basePrice + marginPercent \u2192 pricePerCredit; optionally map LLM tokens to credits (tokensPerCredit + per-model modelBundle). A plan grants it via a CREDIT component referencing this credit's id. (Returns ok with no body \u2014 list credits to see the new id.)",
-      update: "Replace a credit type by id with a complete new definition (full rewrite, same shape as create). Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately.",
-      archive: "Archive (deactivate) a credit type by id. Reversible; does NOT hard-delete. Plans still referencing it should be updated."
+      create: "Create a credit type: a named entitlement your product draws down by recording credit usage against its `agentKey`. `agentKey` is the lowercased stable key that ties runtime usage to this credit. Priced as basePrice + marginPercent \u2192 pricePerCredit; optionally map LLM tokens to credits (tokensPerCredit + per-model modelBundle). A plan grants it via a CREDIT component referencing this credit's id. (Returns ok with no body \u2014 list credits to see the new id.)",
+      update: "Replace a credit by id with its COMPLETE new definition \u2014 a full rewrite, NOT a partial patch: any optional field you omit (description, tokensPerCredit, modelBundle) is CLEARED, not left as-is. Read the current credit with clocknext_get_credit first, change what you need, then send the whole object back. Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately.",
+      archive: "Deactivate a credit TYPE in your catalogue (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete. The credit and its history are kept; recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it). It simply can't be added to new plans and drops out of active lists. Reversible: reactivate via clocknext_update_credit with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool. Use ONLY to retire a credit you no longer sell. This does NOT delete anything and is unrelated to archiving a customer, ending a purchase, or clearing a balance."
     }
   });
   registerCrud(server, {
@@ -22525,9 +22555,9 @@ function registerCatalogueTools(server, cnk) {
     desc: {
       list: "List the organisation's outcome types (id, name, price, active). Use it to find an outcome id to reference from a plan's OUTCOME component.",
       get: "Get one outcome type in full by id \u2014 its steps plus in-flight/completed stats.",
-      create: "Create an outcome type: a multi-step deliverable billed per COMPLETED outcome. It has 1\u201350 `steps`, each with its own lowercased agentKey (used by signals.outcome({ agentKey })) and basePrice. Priced basePrice + marginPercent \u2192 pricePerOutcome. A plan grants it via an OUTCOME component referencing this outcome's id.",
-      update: "Replace an outcome type by id with a complete new definition (full rewrite, same shape as create). Step agent keys are the runtime binding \u2014 change them deliberately.",
-      archive: "Archive (deactivate) an outcome type by id. Reversible; does NOT hard-delete."
+      create: "Create an outcome type: a multi-step deliverable billed per COMPLETED outcome. It has 1\u201350 `steps`, each with its own lowercased agentKey (the key you report that step against when recording usage) and basePrice. Priced basePrice + marginPercent \u2192 pricePerOutcome. A plan grants it via an OUTCOME component referencing this outcome's id.",
+      update: "Replace an outcome by id with its COMPLETE new definition \u2014 a full rewrite, NOT a partial patch: any field you omit (including steps you leave out) is DROPPED, not left as-is. Read the current outcome with clocknext_get_outcome first, edit, then send the whole object back. Step agent keys are the runtime binding \u2014 change them deliberately.",
+      archive: "Deactivate an outcome TYPE in your catalogue (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete. The outcome, its steps, and any in-flight or completed history are kept; existing plans and outcomes already in progress are unaffected. It simply can't be added to new plans and drops out of active lists. Reversible: reactivate via clocknext_update_outcome with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool. Use ONLY to retire an outcome you no longer sell. This does NOT delete anything and is unrelated to archiving a customer or ending a purchase."
     }
   });
   registerCrud(server, {
@@ -22544,9 +22574,9 @@ function registerCatalogueTools(server, cnk) {
     desc: {
       list: "List the organisation's unit types (id, name, pricing type, active). Use it to find a unit id to reference from a plan's UNIT component.",
       get: "Get one unit type in full by id \u2014 pricing type, flat price or tiers, plus usage stats.",
-      create: "Create a unit type: a metered usage unit reported against a lowercased stable `agentKey` (signals.unit({ agentKey })) \u2014 its durable identity, unique org-wide. Price it FLAT (a single `flatPrice` per event, default 0) or tiered \u2014 pricingType SLAB or VOLUME with `tiers` (1\u201350, ordered; only the last tier may have upTo:null). A plan meters it via a UNIT component referencing this unit's id.",
-      update: "Replace a unit type by id with a complete new definition (full rewrite, same shape as create, including `agentKey`). Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately.",
-      archive: "Archive (deactivate) a unit type by id. Reversible; does NOT hard-delete."
+      create: "Create a unit type: a metered usage unit reported against a lowercased stable `agentKey` (the key you send when recording unit usage) \u2014 its durable identity, unique org-wide. Price it FLAT (a single `flatPrice` per event, default 0) or tiered \u2014 pricingType SLAB or VOLUME with `tiers` (1\u201350, ordered; only the last tier may have upTo:null). A plan meters it via a UNIT component referencing this unit's id.",
+      update: "Replace a unit by id with its COMPLETE new definition \u2014 a full rewrite, NOT a partial patch: any optional field you omit (description, tiers, flatPrice) is CLEARED, not left as-is. Read the current unit with clocknext_get_unit first, edit, then send the whole object back. Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately.",
+      archive: "Deactivate a unit TYPE in your catalogue (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete. The unit and its recorded usage are kept; existing plans metering it keep working. It simply can't be added to new plans and drops out of active lists. Reversible: reactivate via clocknext_update_unit with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool. Use ONLY to retire a unit you no longer sell. This does NOT delete anything and is unrelated to archiving a customer or ending a purchase."
     }
   });
 }
@@ -22555,7 +22585,7 @@ function registerCatalogueTools(server, cnk) {
 var customerFields = {
   name: external_exports.string().min(1).describe("Customer / company name."),
   email: external_exports.string().min(1).describe("Primary email \u2014 required, and the key bulk import matches back on."),
-  description: external_exports.string().nullish(),
+  description: external_exports.string().nullish().describe("Optional freeform description of the customer."),
   website: external_exports.string().nullish().describe("The customer's website."),
   phone: external_exports.string().nullish(),
   legalName: external_exports.string().nullish(),
@@ -22566,9 +22596,8 @@ var customerFields = {
   country: external_exports.string().nullish(),
   pincode: external_exports.string().nullish(),
   taxId: external_exports.string().nullish(),
-  notes: external_exports.string().nullish(),
+  notes: external_exports.string().nullish().describe("Internal notes about the customer."),
   logoUrl: external_exports.string().nullish(),
-  creditAllowance: external_exports.number().optional(),
   currencyCode: external_exports.string().optional().describe("ISO 4217 (3 letters); must be enabled for the org. Defaults to the org currency.")
 };
 var customerObject = external_exports.object(customerFields);
@@ -22685,7 +22714,7 @@ function registerCustomerTools(server, cnk) {
         customerId: external_exports.string().describe("The ClockNext customer id (from clocknext_create_customer / _list_customers)."),
         planId: external_exports.string().describe("The plan id to subscribe them to (from clocknext_create_plan / _list_plans)."),
         billingDate: external_exports.string().optional().describe("YYYY-MM-DD. Defaults to today; must be a valid, non-past date."),
-        notes: external_exports.string().optional(),
+        notes: external_exports.string().optional().describe("Internal notes for this purchase."),
         autoPayment: external_exports.boolean().optional().describe("Charge automatically when the invoice is due."),
         voidAfterMinutes: external_exports.number().optional().describe("Auto-void the purchase if it stays unpaid after N minutes.")
       },
