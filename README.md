@@ -15,13 +15,18 @@ This repo ships **two** things:
 - **the `clocknext-onboarding` skill** — the step‑by‑step playbook that drives a
   full setup using those tools (human‑in‑the‑loop, sandbox‑first).
 
-You can install them together (the Claude Code plugin) or separately. Pick one:
+Install them together (the Claude Code plugin) or separately. Pick by what you
+want and which agent you're on:
 
-| You want… | Install |
-| --- | --- |
-| Everything, in **Claude Code**, one command | **[A. The plugin](#a--claude-code-plugin-recommended)** — MCP tools **+** skill, prompts for your key |
-| Just the **tools**, in any MCP client | **[B. The MCP server alone](#b--the-mcp-server-alone-any-harness)** |
-| Just the **skill** (the guided flow) | **[C. The skill alone](#c--the-skill-alone-any-harness)** |
+| Install | What you get | Works in |
+| --- | --- | --- |
+| **[Skill](#1--the-skill-every-ai-coding-agent)** — `npx skills add ClockNext/clocknext-mcp` | the guided onboarding flow | **every** agent (Claude Code, Cursor, Codex, Windsurf, Gemini, Antigravity, VS Code, …) |
+| **[MCP server](#2--the-mcp-server-every-ai-coding-agent)** — `npx -y @clocknext/mcp` | the tools an agent calls | **every** MCP client |
+| **[Plugin](#3--the-claude-code-plugin-claude-code-only)** — `/plugin install clocknext@clocknext` | MCP tools **+** skill, one step | **Claude Code only** |
+
+The skill and the MCP server work together — the skill *drives* the tools — so for
+the full guided experience install **both** (or just use the plugin, which bundles
+them). The plugin is the one‑command option, but Claude Code only.
 
 > A ClockNext API key is required for the tools: **Settings → API Keys** →
 > `cnk_…`. It is a server‑side secret — keep it in env/secret config, never in
@@ -29,31 +34,51 @@ You can install them together (the Claude Code plugin) or separately. Pick one:
 
 ---
 
-## A — Claude Code plugin (recommended)
+## 1 — The skill (every AI coding agent)
 
-Installs the MCP server **and** the `clocknext-onboarding` skill in one step, and
-wires the API key for you.
+The **`clocknext-onboarding`** skill is the guided playbook (detect models →
+entitlements → plan → meter the codebase → test with a dummy customer). It
+**drives the MCP tools**, so install the MCP server too (**§2 below**) — the skill
+on its own has nothing to call.
 
+Install it with **[`npx skills`](https://www.skills.sh)** — one command, works
+across Claude Code, Cursor, Codex, Windsurf, Gemini, Antigravity, VS Code, and
+~20 other agents:
+
+```bash
+# this project:
+npx skills add ClockNext/clocknext-mcp
+# or user-wide (all projects / all agents):
+npx skills add ClockNext/clocknext-mcp --global
 ```
-/plugin marketplace add ClockNext/clocknext-mcp
-/plugin install clocknext@clocknext
+
+It reads the repo, finds `skills/clocknext-onboarding/` (`SKILL.md` + its
+`references/`), and installs it into whatever agent(s) you have. `npx skills list`
+shows what's installed; `npx skills remove clocknext-onboarding` removes it.
+
+<details>
+<summary>Manual install (no CLI)</summary>
+
+Copy the folder from the repo into your agent's skills directory:
+
+```bash
+git clone https://github.com/ClockNext/clocknext-mcp
+# Claude Code — all projects:
+mkdir -p ~/.claude/skills && cp -r clocknext-mcp/skills/clocknext-onboarding ~/.claude/skills/
+# …or this project only: .claude/skills/
 ```
 
-Claude Code prompts for your ClockNext API key at install (stored securely), runs
-the bundled server, and auto‑discovers the skill from the plugin's `skills/`
-folder. Verify:
-
-- `/mcp` → the `clocknext` tools are listed.
-- The skill triggers automatically when you start any ClockNext work (or check
-  your installed skills).
-
-No manual config, no env vars, nothing to build.
+For tools without a native skills folder (Cursor / Windsurf / Codex / Antigravity),
+point their rules file at `skills/clocknext-onboarding/SKILL.md` — e.g.
+`.cursor/rules/clocknext-onboarding.md`, Windsurf Rules, or `AGENTS.md`. Keep the
+`references/*.md` files alongside `SKILL.md`.
+</details>
 
 ---
 
-## B — The MCP server alone (any harness)
+## 2 — The MCP server (every AI coding agent)
 
-Gives you the **tools only** (no skill). Works in any MCP client via
+Gives you the **tools** the skill (and you) call. Works in any MCP client via
 `npx -y @clocknext/mcp`. You supply `CLOCKNEXT_API_KEY`.
 
 **Claude Code** (CLI):
@@ -128,45 +153,26 @@ env:     CLOCKNEXT_API_KEY=cnk_your_key
 
 ---
 
-## C — The skill alone (any harness)
+## 3 — The Claude Code plugin (Claude Code only)
 
-The **`clocknext-onboarding`** skill is the guided playbook (detect models →
-entitlements → plan → meter the codebase → test with a dummy customer). It
-**drives the MCP tools**, so install the MCP server too (**B** above) — the skill
-on its own has nothing to call.
+The one‑command option — installs the MCP server **and** the `clocknext-onboarding`
+skill together, and wires the API key for you. **Claude Code only** (the plugin
+format is Claude Code's; other agents use §1 + §2 above).
 
-Install it with **[`npx skills`](https://www.skills.sh)** — one command, works
-across Claude Code, Cursor, Codex, Windsurf, Gemini, Antigravity, VS Code, and
-~20 other agents:
-
-```bash
-# this project:
-npx skills add ClockNext/clocknext-mcp
-# or user-wide (all projects):
-npx skills add ClockNext/clocknext-mcp --global
+```
+/plugin marketplace add ClockNext/clocknext-mcp
+/plugin install clocknext@clocknext
 ```
 
-It reads the repo, finds `skills/clocknext-onboarding/` (`SKILL.md` + its
-`references/`), and installs it into whatever agent(s) you have. `npx skills list`
-shows what's installed; `npx skills remove clocknext-onboarding` removes it.
+Claude Code prompts for your ClockNext API key at install (stored securely), runs
+the bundled server, and auto‑discovers the skill from the plugin's `skills/`
+folder. Verify:
 
-<details>
-<summary>Manual install (no CLI)</summary>
+- `/mcp` → the `clocknext` tools are listed.
+- The skill triggers automatically when you start any ClockNext work (or check
+  your installed skills).
 
-Copy the folder from the repo into your agent's skills directory:
-
-```bash
-git clone https://github.com/ClockNext/clocknext-mcp
-# Claude Code — all projects:
-mkdir -p ~/.claude/skills && cp -r clocknext-mcp/skills/clocknext-onboarding ~/.claude/skills/
-# …or this project only: .claude/skills/
-```
-
-For tools without a native skills folder (Cursor / Windsurf / Codex / Antigravity),
-point their rules file at `skills/clocknext-onboarding/SKILL.md` — e.g.
-`.cursor/rules/clocknext-onboarding.md`, Windsurf Rules, or `AGENTS.md`. Keep the
-`references/*.md` files alongside `SKILL.md`.
-</details>
+No manual config, no env vars, nothing to build.
 
 ---
 
@@ -195,38 +201,50 @@ customer/model/plan price correctly) → `record_usage` → `get_customer_usage`
 ## Development
 
 ```bash
-npm install          # links the local @clocknext/sdk (file:../clocknext-sdk)
+npm install          # pulls the published @clocknext/sdk
 npm run build        # tsup → dist/index.js (executable bin)
 npm run dev          # run from source via tsx
 CLOCKNEXT_API_KEY=cnk_... npm start
 ```
 
-Built on the official `@modelcontextprotocol/sdk` over `@clocknext/sdk`. stdio
-today; a hosted Streamable‑HTTP variant is planned. Logs go to **stderr** (stdout
-is the protocol channel). The committed `dist/` is what the plugin runs — rebuild
-and commit it on any code change.
+Built on the official `@modelcontextprotocol/sdk` over `@clocknext/sdk` (bundled
+into `dist/` by tsup). stdio today; a hosted Streamable‑HTTP variant is planned.
+Logs go to **stderr** (stdout is the protocol channel). The committed `dist/` is
+what the plugin runs — rebuild and commit it on any code change.
 
-### Publishing to the official MCP Registry (maintainers)
+### Releasing (maintainers) — automated
 
-`server.json` (repo root) is the registry metadata; `package.json` carries the
-matching `mcpName: io.github.ClockNext/mcp` that proves ownership. To publish a new
-version:
+A tag push publishes **both** the npm package and the official MCP Registry entry,
+via [`.github/workflows/publish-mcp.yml`](.github/workflows/publish-mcp.yml):
 
 ```bash
-# 1. bump the version in package.json, server.json ("version" in BOTH the top
-#    level and the npm package entry), src/index.ts, and plugin.json; rebuild:
-npm run build
+# 1. bump the version in package.json, server.json (both "version" fields),
+#    src/index.ts and .claude-plugin/plugin.json; rebuild + commit:
+npm run build && git commit -am "release: vX.Y.Z"
 
-# 2. publish the npm package FIRST (the registry validates against it):
-npm publish --access public
-
-# 3. install the official publisher CLI (once):
-brew install mcp-publisher   # or grab the binary from the registry releases
-
-# 4. authenticate (GitHub device flow — must be a ClockNext org member) and publish:
-mcp-publisher login github
-mcp-publisher publish
+# 2. tag and push — CI does the rest:
+git tag vX.Y.Z && git push origin main --tags
 ```
 
-The registry hosts only metadata pointing at the npm package, so step 2 must land
-before step 4. See the [publishing quickstart](https://modelcontextprotocol.io/registry/about).
+The workflow checks the tag matches `package.json`, builds, `npm publish`es (with
+provenance), then authenticates to the registry with **GitHub OIDC** (no secret)
+and publishes `server.json`. It hosts only metadata pointing at the npm package,
+so the npm publish runs first.
+
+**One‑time setup:** add an `NPM_TOKEN` secret (repo → Settings → Secrets → Actions).
+To drop the token entirely, configure npm **trusted publishing** (OIDC) for
+`@clocknext/mcp` on npmjs.com and delete the `NODE_AUTH_TOKEN` line.
+
+<details>
+<summary>Manual release (no CI)</summary>
+
+```bash
+npm publish --access public                 # npm first — the registry validates against it
+# get the publisher CLI (Linux/macOS, no brew needed):
+curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+./mcp-publisher login github                # device flow — must be a ClockNext org member
+./mcp-publisher publish                     # reads server.json (name io.github.ClockNext/mcp)
+```
+</details>
+
+See the [MCP Registry docs](https://modelcontextprotocol.io/registry/about).
