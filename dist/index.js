@@ -22295,13 +22295,19 @@ function registerAddModel(server, cnk) {
     "clocknext_add_model",
     {
       title: "ClockNext: add (enable) a model",
-      description: "Enable a model for the organisation so usage can be metered against it \u2014 afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. Only models in ClockNext's pricing catalog can be added, AUTOPRICED: give the `provider` and `model` (its catalog id) and ClockNext copies that model's input/output/cache prices from the catalog \u2014 you never set prices here. If the catalog has no price for it, the model is still enabled but meters at $0, and you must set its price manually on the Models page (the tool returns that link and a `warning`). A model or provider that isn't in the catalog can't be added \u2014 check clocknext_list_models first.",
+      description: [
+        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. Autopriced from ClockNext's catalog \u2014 you never set prices here.",
+        "",
+        "Rules:",
+        "- Only models in ClockNext's pricing catalog can be added \u2014 check clocknext_list_models first.",
+        "- If the catalog has no price for it, the model is enabled but meters at $0; the tool returns a Models-page link and a `warning` so you can set pricing."
+      ].join("\n"),
       inputSchema: {
         provider: external_exports.string().min(1).describe(
-          "The model's provider slug in the ClockNext catalog, e.g. 'openai', 'anthropic', 'google'."
+          "Provider slug in the ClockNext catalog, e.g. 'openai', 'anthropic', 'google'."
         ),
         model: external_exports.string().min(1).describe(
-          "The model's catalog id, e.g. 'gpt-4o' or 'claude-sonnet-4-6'. This becomes the modelId you send in usage signals."
+          "Catalog model id, e.g. 'gpt-4o' or 'claude-sonnet-4-6'. Becomes the modelId you send in usage signals."
         )
       },
       annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true }
@@ -22365,13 +22371,15 @@ function registerAddModel(server, cnk) {
 
 // src/tools/catalogue.ts
 var mixerLine = external_exports.object({
-  model: external_exports.string().describe(
-    "Catalog model id from clocknext_list_models (e.g. 'gpt-4o'). Must be enabled \u2014 this grounds the price in that model's live per-1M-token cost."
+  model: external_exports.string().min(1).describe(
+    "Enabled catalog model id from clocknext_list_models (e.g. 'gpt-4o'). Grounds the price in that model's live per-1M-token cost."
   ),
-  avgTokens: external_exports.number().positive().describe("Average TOTAL tokens this uses per credit / per step (input + output + cache combined)."),
+  avgTokens: external_exports.number().positive().describe("Average TOTAL tokens per credit / per step (input + output + cache combined)."),
   inputPct: external_exports.number().min(0).max(100).describe("Percent of avgTokens that are input tokens."),
   outputPct: external_exports.number().min(0).max(100).describe("Percent that are output tokens."),
-  cachePct: external_exports.number().min(0).max(100).default(0).describe("Percent that are cache tokens (default 0). inputPct + outputPct + cachePct must total 100.")
+  cachePct: external_exports.number().min(0).max(100).default(0).describe("Percent that are cache tokens. Default 0.")
+}).refine((l) => Math.round(l.inputPct + l.outputPct + (l.cachePct ?? 0)) === 100, {
+  message: "inputPct + outputPct + cachePct must total 100."
 });
 async function computeMixerBase(cnk, lines) {
   let models;
@@ -22431,7 +22439,7 @@ var unitTier = external_exports.object({
 var planInput = {
   name: external_exports.string().describe("Plan name."),
   description: external_exports.string().nullish().describe("Optional description."),
-  billingCycle: external_exports.enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "YEARLY", "EVERY_5_MIN", "FREE"]).describe("Billing cadence. FREE plans must be ADVANCE-only with no FLAT component."),
+  billingCycle: external_exports.enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "YEARLY", "EVERY_5_MIN", "FREE"]).describe("Billing cadence."),
   carryForward: external_exports.boolean().optional().describe("Carry an unused balance into the next cycle. Default true."),
   currencyCode: external_exports.string().optional().describe("ISO 4217 (3 letters). Default USD."),
   isActive: external_exports.boolean().optional().describe("Whether the plan is active/sellable."),
@@ -22440,38 +22448,40 @@ var planInput = {
   )
 };
 var creditInput = {
-  name: external_exports.string().describe("Credit name."),
-  agentKey: external_exports.string().describe(
-    "Lowercased stable key you report credit usage against (sent as `agentKey` when recording usage). The credit's durable identity."
+  name: external_exports.string().min(1).describe("Credit name."),
+  agentKey: external_exports.string().min(1).describe(
+    "Lowercased stable key you report credit usage against (sent as `agentKey` when recording usage). The credit's durable identity \u2014 chars [a-z0-9._-]; a rename never changes it."
   ),
   models: external_exports.array(mixerLine).min(1).describe(
-    "The model mixer that GROUNDS the price \u2014 one or more enabled catalog models with avg tokens + input/output/cache split. The tool reads live prices and computes the base cost; you never type a raw price."
+    "Model mixer that GROUNDS the price \u2014 one or more enabled catalog models with avg tokens + input/output/cache split. The tool reads live prices and computes the base cost; never type a raw price."
   ),
-  marginPercent: external_exports.number().describe("Markup over the computed base cost, as a percent (e.g. 100 = double the base = pricePerCredit)."),
-  tokensPerCredit: external_exports.number().optional().describe("How many tokens equal one credit (defaults to 0). Governs how usage draws the credit down."),
+  marginPercent: external_exports.number().min(0).describe("Markup over the computed base cost, as a percent (100 = double the base = pricePerCredit)."),
+  tokensPerCredit: external_exports.number().min(0).optional().describe("How many tokens equal one credit. Default 0. Governs how usage draws the credit down."),
   description: external_exports.string().optional().describe("Optional human-readable description.")
 };
 var outcomeStep = external_exports.object({
-  name: external_exports.string().describe("Step name (unique within the outcome)."),
-  agentKey: external_exports.string().describe("Lowercased stable key you report this outcome step against (sent as `agentKey` when recording usage)."),
+  name: external_exports.string().min(1).describe("Step name (unique within the outcome)."),
+  agentKey: external_exports.string().min(1).describe(
+    "Lowercased stable key you report this outcome step against (sent as `agentKey` when recording usage). Chars [a-z0-9._-]."
+  ),
   models: external_exports.array(mixerLine).min(1).describe(
-    "The model mixer grounding THIS step's price (avg tokens + split for the model(s) this step calls). Every outcome step is an LLM step \u2014 a non-LLM, fixed-cost event should be a UNIT, not an outcome step."
+    "Model mixer grounding THIS step's price. Every outcome step is an LLM step \u2014 a non-LLM, fixed-cost event is a UNIT, not an outcome step."
   )
 });
 var outcomeInput = {
-  name: external_exports.string().describe("Outcome name."),
+  name: external_exports.string().min(1).describe("Outcome name."),
   description: external_exports.string().nullish().describe("Optional human-readable description."),
   isActive: external_exports.boolean().optional().describe("Whether the outcome is active/sellable."),
-  marginPercent: external_exports.number().describe("Markup over the summed step base costs, as a percent (e.g. 100 = double = pricePerOutcome)."),
-  steps: external_exports.array(outcomeStep).min(1).max(50).describe("1\u201350 steps; each grounded by its own model mixer. Step names and agent keys must each be unique.")
+  marginPercent: external_exports.number().min(0).describe("Markup over the summed step base costs, as a percent (100 = double = pricePerOutcome)."),
+  steps: external_exports.array(outcomeStep).min(1).max(50).describe("1\u201350 steps, each grounded by its own model mixer. Step names and agent keys must each be unique.")
 };
 var unitInput = {
-  name: external_exports.string().describe("Unit name."),
-  agentKey: external_exports.string().describe(
+  name: external_exports.string().min(1).describe("Unit name."),
+  agentKey: external_exports.string().min(1).describe(
     "Lowercased stable key consumption is reported against (sent as `agentKey` when recording unit usage). The unit's durable identity \u2014 unique org-wide, chars [a-z0-9._-]; a rename never changes it."
   ),
-  pricingType: external_exports.enum(["FLAT", "SLAB", "VOLUME"]).describe("FLAT = a single per-event price; SLAB/VOLUME = tiered pricing."),
-  flatPrice: external_exports.number().optional().describe("FLAT only: price per event. Defaults to 0."),
+  pricingType: external_exports.enum(["FLAT", "SLAB", "VOLUME"]).describe("FLAT = a single per-event price. SLAB/VOLUME = tiered pricing."),
+  flatPrice: external_exports.number().min(0).optional().describe("FLAT only: price per event. Default 0."),
   tiers: external_exports.array(unitTier).max(50).optional().describe("SLAB/VOLUME only: 1\u201350 tiers, ordered; only the last may have upTo:null."),
   description: external_exports.string().nullish().describe("Optional human-readable description."),
   isActive: external_exports.boolean().optional().describe("Whether the unit is active/sellable.")
@@ -22602,11 +22612,32 @@ function registerCatalogueTools(server, cnk) {
     },
     input: planInput,
     desc: {
-      list: "List the organisation's billing plans (id, name, billing cycle, price, active). Use it to find a plan id or to see what's on offer. Pass active=true for only sellable plans.",
+      list: "List the organisation's billing plans (id, name, billing cycle, price, active). Find a plan id, or see what's on offer. Pass active=true for only sellable plans.",
       get: "Get one plan in full by id \u2014 its entitlement components (wallet/credit/outcome/unit/flat), billing cycle, currency and active state.",
-      create: "Create a billing plan. A plan bundles one or more entitlement `components`: WALLET (prepaid USD balance, debited at raw model cost \u2014 NO margin), FLAT (one-off fee), or CREDIT/OUTCOME/UNIT entitlements that reference an existing credit/outcome/unit BY ID \u2014 so create those first (clocknext_create_credit / _outcome / _unit) and list them to get ids. Each component has a billingMode: ADVANCE (up-front, needs amount/quantity) or ARREAR (metered). FREE plans must be ADVANCE-only with no FLAT component. PREFER the dashboard plan builder (https://payments.clocknext.com/plans) \u2014 it previews what a customer pays; use this tool as the fallback. This creates a real, sellable plan \u2014 get the pricing right before you create it.",
-      update: "Replace a plan by id with a COMPLETE new definition (same shape as create \u2014 a full rewrite, not a patch; omitted fields are dropped). Changes the plan going forward; customers already on it keep their terms. Read it first with clocknext_get_plan, edit, then send the whole thing back.",
-      archive: "Deactivate a plan in your catalogue (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete. The plan and its history are kept and customers already on it are unaffected; it simply becomes unsellable and drops out of active lists. Reversible: reactivate via clocknext_update_plan with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool. Use ONLY to retire a plan you no longer sell. This does NOT delete anything and is unrelated to cancelling a customer's purchase or ending a subscription."
+      create: [
+        "Create a billing plan bundling one or more entitlement `components`: WALLET (prepaid USD balance, debited at raw model cost \u2014 no margin), FLAT (one-off fee), or CREDIT/OUTCOME/UNIT entitlements referencing an existing resource by id.",
+        "",
+        "Rules:",
+        "- Create referenced credits/outcomes/units first (clocknext_create_credit / _outcome / _unit), then pass their ids.",
+        "- Each component's billingMode is ADVANCE (up-front, needs amount/quantity) or ARREAR (metered).",
+        "- FREE plans must be ADVANCE-only with no FLAT component.",
+        "- Creates a real, sellable plan \u2014 get pricing right first. Prefer the dashboard plan builder (https://payments.clocknext.com/plans); this is the fallback."
+      ].join("\n"),
+      update: [
+        "Replace a plan by id with a COMPLETE new definition (same shape as create).",
+        "",
+        "Rules:",
+        "- Full rewrite, not a patch \u2014 omitted fields are dropped. Read it first with clocknext_get_plan, edit, then send the whole thing back.",
+        "- Changes apply going forward; customers already on the plan keep their terms."
+      ].join("\n"),
+      archive: [
+        "Deactivate a plan (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete.",
+        "",
+        "Rules:",
+        "- History is kept and customers already on it are unaffected; it just becomes unsellable and drops out of active lists.",
+        "- Reversible: reactivate via clocknext_update_plan with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool.",
+        "- Unrelated to cancelling a customer's purchase or ending a subscription."
+      ].join("\n")
     }
   });
   registerCrud(server, {
@@ -22636,11 +22667,33 @@ function registerCatalogueTools(server, cnk) {
       };
     },
     desc: {
-      list: "List the organisation's credit types (id, name, agentKey, price, active). Use it to find a credit id to reference from a plan's CREDIT component.",
+      list: "List the organisation's credit types (id, name, agentKey, price, active). Find a credit id to reference from a plan's CREDIT component.",
       get: "Get one credit type in full by id \u2014 pricing, token mapping and active state.",
-      create: "Create a credit type \u2014 a token-metered entitlement your product draws down against its `agentKey`. Pricing is MODEL-GROUNDED: give `models` (a mixer of enabled catalog model(s) + avg tokens + input/output/cache split) and a `marginPercent`; the tool reads live model prices and COMPUTES the base price + price-per-credit \u2014 you never hand-type a price, so a credit can't be mispriced or grounded in a disabled model. First-class alternative: create/price it in the dashboard (https://payments.clocknext.com/credits) \u2014 its live mixer preview is clearer and records the full per-model bundle; use this tool as the fallback (it stores the computed price only). A plan grants the credit via a CREDIT component referencing its id.",
-      update: "Replace a credit by id with its COMPLETE new definition \u2014 a full rewrite, NOT a partial patch (omitted fields are cleared). Pricing is re-grounded from the `models` mixer you pass (same as create). To only flip active state, pass the current values plus isActive. Read the current credit with clocknext_get_credit first. Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately.",
-      archive: "Deactivate a credit TYPE in your catalogue (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete. The credit and its history are kept; recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it). It simply can't be added to new plans and drops out of active lists. Reversible: reactivate via clocknext_update_credit with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool. Use ONLY to retire a credit you no longer sell. This does NOT delete anything and is unrelated to archiving a customer, ending a purchase, or clearing a balance."
+      create: [
+        "Create a credit \u2014 a token-metered entitlement your product draws down against its `agentKey`.",
+        "",
+        "Rules:",
+        "- Price is model-grounded: give the `models` mixer + `marginPercent`; the tool reads live model prices and computes the base price + price-per-credit. Never hand-typed.",
+        "- Enable the models you price against first (clocknext_add_model / _list_models).",
+        "- Prefer the dashboard credits builder (https://payments.clocknext.com/credits) \u2014 its live preview records the full per-model bundle; this fallback stores the computed price only.",
+        "- A plan grants the credit via a CREDIT component referencing its id."
+      ].join("\n"),
+      update: [
+        "Replace a credit by id with its COMPLETE new definition.",
+        "",
+        "Rules:",
+        "- Full rewrite, not a patch \u2014 omitted fields are cleared. Read it first with clocknext_get_credit.",
+        "- Pricing is re-grounded from the `models` mixer you pass (same as create). To only flip active state, resend the current values plus isActive.",
+        "- Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately."
+      ].join("\n"),
+      archive: [
+        "Deactivate a credit TYPE (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete.",
+        "",
+        "Rules:",
+        "- Recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it); it just can't be added to new plans and drops out of active lists.",
+        "- Reversible: reactivate via clocknext_update_credit with isActive:true (a full rewrite).",
+        "- Unrelated to archiving a customer, ending a purchase, or clearing a balance."
+      ].join("\n")
     }
   });
   registerCrud(server, {
@@ -22681,11 +22734,33 @@ function registerCatalogueTools(server, cnk) {
       };
     },
     desc: {
-      list: "List the organisation's outcome types (id, name, price, active). Use it to find an outcome id to reference from a plan's OUTCOME component.",
+      list: "List the organisation's outcome types (id, name, price, active). Find an outcome id to reference from a plan's OUTCOME component.",
       get: "Get one outcome type in full by id \u2014 its steps plus in-flight/completed stats.",
-      create: "Create an outcome type \u2014 a multi-step LLM deliverable billed per COMPLETED outcome. Each of the 1\u201350 `steps` has its own `agentKey` and its own model mixer (`models`): the tool computes each step's base cost from live model prices, sums them, and applies `marginPercent`. Outcomes are for token-priced, multi-LLM-step deliverables; a fixed-cost / non-LLM event (e.g. an upload or export) belongs in a UNIT, not an outcome step. First-class alternative: build it in the dashboard (https://payments.clocknext.com/outcomes) \u2014 clearer per-step pricing preview; use this tool as the fallback. A plan grants it via an OUTCOME component referencing its id.",
-      update: "Replace an outcome by id with its COMPLETE new definition \u2014 a full rewrite, NOT a partial patch (omitted steps/fields are dropped). Each step's price is re-grounded from its `models` mixer (same as create). Read the current outcome with clocknext_get_outcome first. Step agent keys are the runtime binding \u2014 change them deliberately.",
-      archive: "Deactivate an outcome TYPE in your catalogue (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete. The outcome, its steps, and any in-flight or completed history are kept; existing plans and outcomes already in progress are unaffected. It simply can't be added to new plans and drops out of active lists. Reversible: reactivate via clocknext_update_outcome with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool. Use ONLY to retire an outcome you no longer sell. This does NOT delete anything and is unrelated to archiving a customer or ending a purchase."
+      create: [
+        "Create an outcome \u2014 a multi-step LLM deliverable billed per COMPLETED outcome. Each of the 1\u201350 `steps` has its own `agentKey` and model mixer.",
+        "",
+        "Rules:",
+        "- Price is model-grounded: each step's base cost is computed from live model prices, summed, then `marginPercent` applied. Never hand-typed.",
+        "- Every step is an LLM step. A fixed-cost / non-LLM event (an upload, an export) is a UNIT, not an outcome step.",
+        "- Prefer the dashboard outcomes builder (https://payments.clocknext.com/outcomes); this is the fallback.",
+        "- A plan grants it via an OUTCOME component referencing its id."
+      ].join("\n"),
+      update: [
+        "Replace an outcome by id with its COMPLETE new definition.",
+        "",
+        "Rules:",
+        "- Full rewrite, not a patch \u2014 omitted steps/fields are dropped. Read it first with clocknext_get_outcome.",
+        "- Each step's price is re-grounded from its `models` mixer (same as create).",
+        "- Step agent keys are the runtime binding \u2014 change them deliberately."
+      ].join("\n"),
+      archive: [
+        "Deactivate an outcome TYPE (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete.",
+        "",
+        "Rules:",
+        "- Steps and any in-flight/completed history are kept; existing plans and in-progress outcomes are unaffected; it just can't be added to new plans and drops out of active lists.",
+        "- Reversible: reactivate via clocknext_update_outcome with isActive:true (a full rewrite).",
+        "- Unrelated to archiving a customer or ending a purchase."
+      ].join("\n")
     }
   });
   registerCrud(server, {
@@ -22700,11 +22775,32 @@ function registerCatalogueTools(server, cnk) {
     },
     input: unitInput,
     desc: {
-      list: "List the organisation's unit types (id, name, pricing type, active). Use it to find a unit id to reference from a plan's UNIT component.",
+      list: "List the organisation's unit types (id, name, pricing type, active). Find a unit id to reference from a plan's UNIT component.",
       get: "Get one unit type in full by id \u2014 pricing type, flat price or tiers, plus usage stats.",
-      create: "Create a unit type: a metered usage unit reported against a lowercased stable `agentKey` (the key you send when recording unit usage) \u2014 its durable identity, unique org-wide. Units are for FIXED-COST / non-LLM events (an upload, an export, a seat) \u2014 one event = one unit, no tokens. Price it FLAT (a single `flatPrice` per event, default 0) or tiered \u2014 pricingType SLAB or VOLUME with `tiers` (1\u201350, ordered; only the last tier may have upTo:null). PREFER the dashboard (https://payments.clocknext.com/units) for the live price preview; use this tool as the fallback. A plan meters it via a UNIT component referencing this unit's id.",
-      update: "Replace a unit by id with its COMPLETE new definition \u2014 a full rewrite, NOT a partial patch: any optional field you omit (description, tiers, flatPrice) is CLEARED, not left as-is. Read the current unit with clocknext_get_unit first, edit, then send the whole object back. Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately.",
-      archive: "Deactivate a unit TYPE in your catalogue (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete. The unit and its recorded usage are kept; existing plans metering it keep working. It simply can't be added to new plans and drops out of active lists. Reversible: reactivate via clocknext_update_unit with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool. Use ONLY to retire a unit you no longer sell. This does NOT delete anything and is unrelated to archiving a customer or ending a purchase."
+      create: [
+        "Create a unit \u2014 a metered usage unit for FIXED-COST / non-LLM events (an upload, an export, a seat): one event = one unit, no tokens.",
+        "",
+        "Rules:",
+        "- Price it FLAT (single `flatPrice` per event, default 0) or tiered (pricingType SLAB or VOLUME with `tiers`).",
+        "- Reported against a lowercased stable `agentKey` \u2014 its durable identity, unique org-wide.",
+        "- Prefer the dashboard units builder (https://payments.clocknext.com/units); this is the fallback.",
+        "- A plan meters it via a UNIT component referencing its id."
+      ].join("\n"),
+      update: [
+        "Replace a unit by id with its COMPLETE new definition.",
+        "",
+        "Rules:",
+        "- Full rewrite, not a patch \u2014 omitted optional fields (description, tiers, flatPrice) are CLEARED. Read it first with clocknext_get_unit.",
+        "- Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately."
+      ].join("\n"),
+      archive: [
+        "Deactivate a unit TYPE (sets isActive\u2192false) \u2014 ClockNext's soft archive, NOT a delete.",
+        "",
+        "Rules:",
+        "- Recorded usage is kept and existing plans metering it keep working; it just can't be added to new plans and drops out of active lists.",
+        "- Reversible: reactivate via clocknext_update_unit with isActive:true (a full rewrite).",
+        "- Unrelated to archiving a customer or ending a purchase."
+      ].join("\n")
     }
   });
 }
@@ -22734,7 +22830,13 @@ function registerCustomerTools(server, cnk) {
     "clocknext_create_customer",
     {
       title: "ClockNext: create customer",
-      description: "Create a ClockNext customer \u2014 the entity you bill (maps to one of your end-users / tenants / organisations). `name` and `email` are required; everything else is optional profile. Returns the customer with its ClockNext `id`, which you pass as `customerId` when subscribing to a plan (clocknext_create_purchase) and when recording usage (clocknext_record_usage).",
+      description: [
+        "Create a ClockNext customer \u2014 the entity you bill (maps to one of your end-users / tenants / organisations).",
+        "",
+        "Rules:",
+        "- `name` and `email` are required; everything else is optional profile.",
+        "- Returns the customer `id` \u2014 pass it as `customerId` to clocknext_create_purchase and clocknext_record_usage."
+      ].join("\n"),
       inputSchema: customerFields,
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true }
     },
@@ -22786,7 +22888,7 @@ function registerCustomerTools(server, cnk) {
     "clocknext_get_customer_usage",
     {
       title: "ClockNext: get customer usage",
-      description: "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed \u2014 e.g. after running the product's code so it fires a real signal, check the event shows up here with the expected model, tokens, and cost. For a signal you fire directly, clocknext_record_usage already returns the priced log inline, so this is mainly for signals sent by the running codebase.",
+      description: "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed \u2014 e.g. after running the product's code so it fires a real signal, check the event shows up with the expected model, tokens, and cost. For a signal you fire directly, clocknext_record_usage already returns the priced log inline, so this is mainly for signals sent by the running codebase.",
       inputSchema: {
         id: external_exports.string().describe("The ClockNext customer id."),
         limit: external_exports.number().int().min(1).max(100).optional().describe("Max usage rows to return (most recent first).")
@@ -22837,14 +22939,20 @@ function registerCustomerTools(server, cnk) {
     "clocknext_create_purchase",
     {
       title: "ClockNext: subscribe customer to a plan",
-      description: "Subscribe a customer to a plan (a 'purchase') \u2014 this is what activates the plan for that customer. A usage signal only prices if the customer has an active plan whose components match the meter (credit / outcome / unit), so do this after clocknext_create_customer + clocknext_create_plan. Used to wire up a dummy customer before firing test signals.",
+      description: [
+        "Subscribe a customer to a plan (a 'purchase') \u2014 this activates the plan for that customer. Used to wire up a dummy customer before firing test signals.",
+        "",
+        "Rules:",
+        "- Do this after clocknext_create_customer + clocknext_create_plan.",
+        "- A usage signal only prices if the customer has an active plan whose components match the meter (credit / outcome / unit)."
+      ].join("\n"),
       inputSchema: {
-        customerId: external_exports.string().describe("The ClockNext customer id (from clocknext_create_customer / _list_customers)."),
-        planId: external_exports.string().describe("The plan id to subscribe them to (from clocknext_create_plan / _list_plans)."),
-        billingDate: external_exports.string().optional().describe("YYYY-MM-DD. Defaults to today; must be a valid, non-past date."),
+        customerId: external_exports.string().describe("ClockNext customer id (from clocknext_create_customer / _list_customers)."),
+        planId: external_exports.string().describe("Plan id (from clocknext_create_plan / _list_plans)."),
+        billingDate: external_exports.string().optional().describe("YYYY-MM-DD. Default today; must be a valid, non-past date."),
         notes: external_exports.string().optional().describe("Internal notes for this purchase."),
         autoPayment: external_exports.boolean().optional().describe("Charge automatically when the invoice is due."),
-        voidAfterMinutes: external_exports.number().optional().describe("Auto-void the purchase if it stays unpaid after N minutes.")
+        voidAfterMinutes: external_exports.number().int().positive().optional().describe("Auto-void the purchase if it stays unpaid after N minutes.")
       },
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true }
     },
@@ -22860,9 +22968,16 @@ function registerCustomerTools(server, cnk) {
     "clocknext_bulk_import_customers",
     {
       title: "ClockNext: bulk import customers",
-      description: "Bulk-create ClockNext customers in ONE request \u2014 for backfilling an existing user base. Pass an array of customers (each needs name + email; up to 200 per call). The whole batch goes to the server in a single call and comes back with a PER-ROW result \u2014 created id, or an error \u2014 so one duplicate/bad row never aborts the batch. Match results back to your users by email. Runs against a private, MCP-only bulk endpoint (no SDK / public API); for a larger base, call it again in \u2264200-row chunks.",
+      description: [
+        "Bulk-create ClockNext customers in ONE request \u2014 for backfilling an existing user base. Returns a PER-ROW result (created id, or an error) so one duplicate/bad row never aborts the batch.",
+        "",
+        "Rules:",
+        "- Each customer needs name + email; up to 200 per call. For a larger base, call again in \u2264200-row chunks.",
+        "- Match results back to your users by email.",
+        "- MCP-only bulk endpoint (no SDK / public API)."
+      ].join("\n"),
       inputSchema: {
-        customers: external_exports.array(customerObject).min(1).max(200).describe("The customers to create (name + email required each; \u2264200 per call).")
+        customers: external_exports.array(customerObject).min(1).max(200).describe("Customers to create; name + email required each; \u2264200 per call.")
       },
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true }
     },
@@ -22931,11 +23046,11 @@ function resolveDocsUrl() {
 // src/tools/get-doc.ts
 var DOCS_URL = resolveDocsUrl();
 var DESCRIPTION = [
-  "Read the FULL contents of a single ClockNext docs page as Markdown. Use this right after clocknext_search_docs: pass the `url` of a promising search result to read the whole page \u2014 endpoints, parameters, request/response fields, and code samples that the search snippet leaves out.",
+  "Read the FULL contents of a single ClockNext docs page as Markdown. Use right after clocknext_search_docs: pass a result's `url` to read the whole page \u2014 endpoints, parameters, request/response fields, and code samples the search snippet leaves out.",
   "",
-  "clocknext_search_docs finds WHICH page you need (title + url + a short snippet); this tool reads THAT page in full. A snippet is enough to choose a page, never enough to implement against \u2014 when you need exact field names, types, or the request body, call this.",
-  "",
-  "ALWAYS use this for ClockNext docs instead of any external web-fetch/browser tool: it returns the authoritative page verbatim, whereas an external fetch routes the page through a summariser that can silently drop details (e.g. required fields like agentKey/idempotencyKey)."
+  "Rules:",
+  "- A search snippet is enough to CHOOSE a page, never enough to implement against \u2014 read the page when you need exact field names, types, or the request body.",
+  "- Use this for ClockNext docs, not an external web-fetch/browser tool: it returns the page verbatim, whereas an external fetch may silently drop details (e.g. required fields like agentKey/idempotencyKey)."
 ].join("\n");
 function registerGetDoc(server) {
   server.registerTool(
@@ -23032,11 +23147,17 @@ function registerRecordUsage(server, cnk) {
     "clocknext_record_usage",
     {
       title: "ClockNext: record usage",
-      description: "Record ONE real usage signal \u2014 it is metered and billed. Prices the tokens against the model and the customer's plan and returns the resulting usage log. Pass an idempotencyKey to make retries safe (a repeat with the same key returns the original result instead of double-recording). For a no-op preflight, use clocknext_verify_signal instead.",
+      description: [
+        "Record ONE real usage signal. Prices the tokens against the model and the customer's plan and returns the resulting usage log.",
+        "",
+        "Rules:",
+        "- Bills for real. For a no-op price preview, use clocknext_verify_signal instead.",
+        "- Reuse the SAME idempotencyKey across retries of one event so a lost response can't double-record it."
+      ].join("\n"),
       inputSchema: {
         ...signalShape,
         idempotencyKey: external_exports.string().optional().describe(
-          "Optional dedup key. Reuse the SAME key across retries of one logical event so a lost response can't double-record it."
+          "Dedup key. Reuse the SAME value across retries of one logical event; a repeat returns the original result instead of recording again."
         )
       },
       annotations: { idempotentHint: false, openWorldHint: true }
@@ -23059,16 +23180,9 @@ var DOCS_URL2 = resolveDocsUrl();
 var DESCRIPTION2 = [
   "Search ClockNext's official documentation and get back the most relevant pages (title, URL, and a snippet). ClockNext is a usage-based billing platform: you meter product/AI usage, price it against plans and units, and bill customers for it.",
   "",
-  "ALWAYS prefer this over answering from memory \u2014 the docs are the source of truth and are more current than your training data. Call it before you explain a ClockNext concept, design an integration, or reach for any other ClockNext tool.",
-  "",
-  "Docs come in three `kind`s. Work through them in order:",
-  "  1. `concept` \u2014 WHAT things are and HOW ClockNext works: the domain model (plans, units, outcomes, credits, customers, invoices, wallet/balances) and billing behaviour. START HERE to get context. If a term is unfamiliar, search `concept` first before touching any reference.",
-  "  2. `api` \u2014 the language-agnostic REST API reference (endpoints, params, request/response shapes). Use this to actually implement or call ClockNext from ANY language.",
-  "  3. `javascript` \u2014 reference for the official JavaScript/TypeScript SDK (@clocknext/sdk), a typed convenience wrapper over the same REST API.",
-  "",
-  "IMPORTANT \u2014 the SDK is JavaScript/TypeScript ONLY, and the docs will NOT tell you this. If the customer's codebase is not JS/TS (e.g. Python, Go, Ruby, PHP, Rust, Java, C#), do NOT use the `javascript` kind \u2014 use `api` and integrate against the REST API directly. Only choose `javascript` once you have confirmed the target codebase is JS/TS.",
-  "",
-  "Omit `kind` to search everything. Typical flow: search `concept` to understand the task, then search `api` (or `javascript` for a JS/TS codebase) for the exact reference you need to write code."
+  "Rules:",
+  "- Prefer this over answering from memory \u2014 the docs are the source of truth and more current than training data. Search before explaining a ClockNext concept, designing an integration, or reaching for another ClockNext tool.",
+  "- Typical flow: search kind=concept to understand the task, then kind=api (or kind=javascript for a JS/TS codebase) for the exact reference you need to write code."
 ].join("\n");
 function registerSearchDocs(server) {
   server.registerTool(
@@ -23081,7 +23195,7 @@ function registerSearchDocs(server) {
           "What to look for, in natural language \u2014 e.g. 'how do I record token usage', 'create a plan with tiered pricing', 'what is a unit vs an outcome'."
         ),
         kind: external_exports.enum(["concept", "api", "javascript"]).optional().describe(
-          "Restrict results: 'concept' (domain / how it works \u2014 start here), 'api' (REST reference, any language), or 'javascript' (JS/TS SDK reference \u2014 JS/TS codebases ONLY). Omit to search all docs."
+          "Restrict results. concept: domain / how it works \u2014 start here for unfamiliar terms. api: REST reference, any language. javascript: JS/TS SDK reference \u2014 use ONLY after confirming the target codebase is JS/TS; NEVER for Python/Go/Ruby/PHP/Rust/Java/C#. Omit to search all docs."
         ),
         limit: external_exports.number().int().min(1).max(20).optional().describe("Maximum number of pages to return (default 8).")
       }
@@ -23140,7 +23254,12 @@ function registerWhoami(server, cnk) {
     "clocknext_whoami",
     {
       title: "ClockNext: identify workspace",
-      description: "Identify the ClockNext organisation behind the configured API key, and \u2014 crucially \u2014 whether it is a 'sandbox' (a disposable staging twin) or the 'live' organisation. Call this FIRST to confirm you are pointed at the intended workspace before recording any real usage.",
+      description: [
+        "Identify the ClockNext organisation behind the configured API key, and whether it is a 'sandbox' (a disposable staging twin) or the 'live' organisation.",
+        "",
+        "Rules:",
+        "- Call FIRST to confirm you are pointed at the intended workspace before recording any real usage."
+      ].join("\n"),
       inputSchema: {}
     },
     async () => {

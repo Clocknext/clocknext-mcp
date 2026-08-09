@@ -9,15 +9,20 @@ export function registerRecordUsage(server: McpServer, cnk: ClockNext): void {
     "clocknext_record_usage",
     {
       title: "ClockNext: record usage",
-      description:
-        "Record ONE real usage signal — it is metered and billed. Prices the tokens against the model and the customer's plan and returns the resulting usage log. Pass an idempotencyKey to make retries safe (a repeat with the same key returns the original result instead of double-recording). For a no-op preflight, use clocknext_verify_signal instead.",
+      description: [
+        "Record ONE real usage signal. Prices the tokens against the model and the customer's plan and returns the resulting usage log.",
+        "",
+        "Rules:",
+        "- Bills for real. For a no-op price preview, use clocknext_verify_signal instead.",
+        "- Reuse the SAME idempotencyKey across retries of one event so a lost response can't double-record it.",
+      ].join("\n"),
       inputSchema: {
         ...signalShape,
         idempotencyKey: z
           .string()
           .optional()
           .describe(
-            "Optional dedup key. Reuse the SAME key across retries of one logical event so a lost response can't double-record it.",
+            "Dedup key. Reuse the SAME value across retries of one logical event; a repeat returns the original result instead of recording again.",
           ),
       },
       annotations: { idempotentHint: false, openWorldHint: true },

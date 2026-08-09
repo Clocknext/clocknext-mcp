@@ -48,8 +48,13 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
     "clocknext_create_customer",
     {
       title: "ClockNext: create customer",
-      description:
-        "Create a ClockNext customer — the entity you bill (maps to one of your end-users / tenants / organisations). `name` and `email` are required; everything else is optional profile. Returns the customer with its ClockNext `id`, which you pass as `customerId` when subscribing to a plan (clocknext_create_purchase) and when recording usage (clocknext_record_usage).",
+      description: [
+        "Create a ClockNext customer — the entity you bill (maps to one of your end-users / tenants / organisations).",
+        "",
+        "Rules:",
+        "- `name` and `email` are required; everything else is optional profile.",
+        "- Returns the customer `id` — pass it as `customerId` to clocknext_create_purchase and clocknext_record_usage.",
+      ].join("\n"),
       inputSchema: customerFields,
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -106,7 +111,7 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
     {
       title: "ClockNext: get customer usage",
       description:
-        "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed — e.g. after running the product's code so it fires a real signal, check the event shows up here with the expected model, tokens, and cost. For a signal you fire directly, clocknext_record_usage already returns the priced log inline, so this is mainly for signals sent by the running codebase.",
+        "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed — e.g. after running the product's code so it fires a real signal, check the event shows up with the expected model, tokens, and cost. For a signal you fire directly, clocknext_record_usage already returns the priced log inline, so this is mainly for signals sent by the running codebase.",
       inputSchema: {
         id: z.string().describe("The ClockNext customer id."),
         limit: z
@@ -168,21 +173,28 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
     "clocknext_create_purchase",
     {
       title: "ClockNext: subscribe customer to a plan",
-      description:
-        "Subscribe a customer to a plan (a 'purchase') — this is what activates the plan for that customer. A usage signal only prices if the customer has an active plan whose components match the meter (credit / outcome / unit), so do this after clocknext_create_customer + clocknext_create_plan. Used to wire up a dummy customer before firing test signals.",
+      description: [
+        "Subscribe a customer to a plan (a 'purchase') — this activates the plan for that customer. Used to wire up a dummy customer before firing test signals.",
+        "",
+        "Rules:",
+        "- Do this after clocknext_create_customer + clocknext_create_plan.",
+        "- A usage signal only prices if the customer has an active plan whose components match the meter (credit / outcome / unit).",
+      ].join("\n"),
       inputSchema: {
         customerId: z
           .string()
-          .describe("The ClockNext customer id (from clocknext_create_customer / _list_customers)."),
-        planId: z.string().describe("The plan id to subscribe them to (from clocknext_create_plan / _list_plans)."),
+          .describe("ClockNext customer id (from clocknext_create_customer / _list_customers)."),
+        planId: z.string().describe("Plan id (from clocknext_create_plan / _list_plans)."),
         billingDate: z
           .string()
           .optional()
-          .describe("YYYY-MM-DD. Defaults to today; must be a valid, non-past date."),
+          .describe("YYYY-MM-DD. Default today; must be a valid, non-past date."),
         notes: z.string().optional().describe("Internal notes for this purchase."),
         autoPayment: z.boolean().optional().describe("Charge automatically when the invoice is due."),
         voidAfterMinutes: z
           .number()
+          .int()
+          .positive()
           .optional()
           .describe("Auto-void the purchase if it stays unpaid after N minutes."),
       },
@@ -201,14 +213,20 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
     "clocknext_bulk_import_customers",
     {
       title: "ClockNext: bulk import customers",
-      description:
-        "Bulk-create ClockNext customers in ONE request — for backfilling an existing user base. Pass an array of customers (each needs name + email; up to 200 per call). The whole batch goes to the server in a single call and comes back with a PER-ROW result — created id, or an error — so one duplicate/bad row never aborts the batch. Match results back to your users by email. Runs against a private, MCP-only bulk endpoint (no SDK / public API); for a larger base, call it again in ≤200-row chunks.",
+      description: [
+        "Bulk-create ClockNext customers in ONE request — for backfilling an existing user base. Returns a PER-ROW result (created id, or an error) so one duplicate/bad row never aborts the batch.",
+        "",
+        "Rules:",
+        "- Each customer needs name + email; up to 200 per call. For a larger base, call again in ≤200-row chunks.",
+        "- Match results back to your users by email.",
+        "- MCP-only bulk endpoint (no SDK / public API).",
+      ].join("\n"),
       inputSchema: {
         customers: z
           .array(customerObject)
           .min(1)
           .max(200)
-          .describe("The customers to create (name + email required each; ≤200 per call)."),
+          .describe("Customers to create; name + email required each; ≤200 per call."),
       },
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true },
     },

@@ -24,20 +24,25 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
     "clocknext_add_model",
     {
       title: "ClockNext: add (enable) a model",
-      description:
-        "Enable a model for the organisation so usage can be metered against it — afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. Only models in ClockNext's pricing catalog can be added, AUTOPRICED: give the `provider` and `model` (its catalog id) and ClockNext copies that model's input/output/cache prices from the catalog — you never set prices here. If the catalog has no price for it, the model is still enabled but meters at $0, and you must set its price manually on the Models page (the tool returns that link and a `warning`). A model or provider that isn't in the catalog can't be added — check clocknext_list_models first.",
+      description: [
+        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. Autopriced from ClockNext's catalog — you never set prices here.",
+        "",
+        "Rules:",
+        "- Only models in ClockNext's pricing catalog can be added — check clocknext_list_models first.",
+        "- If the catalog has no price for it, the model is enabled but meters at $0; the tool returns a Models-page link and a `warning` so you can set pricing.",
+      ].join("\n"),
       inputSchema: {
         provider: z
           .string()
           .min(1)
           .describe(
-            "The model's provider slug in the ClockNext catalog, e.g. 'openai', 'anthropic', 'google'.",
+            "Provider slug in the ClockNext catalog, e.g. 'openai', 'anthropic', 'google'.",
           ),
         model: z
           .string()
           .min(1)
           .describe(
-            "The model's catalog id, e.g. 'gpt-4o' or 'claude-sonnet-4-6'. This becomes the modelId you send in usage signals.",
+            "Catalog model id, e.g. 'gpt-4o' or 'claude-sonnet-4-6'. Becomes the modelId you send in usage signals.",
           ),
       },
       annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },

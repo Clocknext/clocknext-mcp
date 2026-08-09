@@ -9,11 +9,11 @@ const DOCS_URL = resolveDocsUrl();
 type Doc = { path: string; title: string; kind: string; markdown: string };
 
 const DESCRIPTION = [
-  "Read the FULL contents of a single ClockNext docs page as Markdown. Use this right after clocknext_search_docs: pass the `url` of a promising search result to read the whole page — endpoints, parameters, request/response fields, and code samples that the search snippet leaves out.",
+  "Read the FULL contents of a single ClockNext docs page as Markdown. Use right after clocknext_search_docs: pass a result's `url` to read the whole page — endpoints, parameters, request/response fields, and code samples the search snippet leaves out.",
   "",
-  "clocknext_search_docs finds WHICH page you need (title + url + a short snippet); this tool reads THAT page in full. A snippet is enough to choose a page, never enough to implement against — when you need exact field names, types, or the request body, call this.",
-  "",
-  "ALWAYS use this for ClockNext docs instead of any external web-fetch/browser tool: it returns the authoritative page verbatim, whereas an external fetch routes the page through a summariser that can silently drop details (e.g. required fields like agentKey/idempotencyKey).",
+  "Rules:",
+  "- A search snippet is enough to CHOOSE a page, never enough to implement against — read the page when you need exact field names, types, or the request body.",
+  "- Use this for ClockNext docs, not an external web-fetch/browser tool: it returns the page verbatim, whereas an external fetch may silently drop details (e.g. required fields like agentKey/idempotencyKey).",
 ].join("\n");
 
 export function registerGetDoc(server: McpServer): void {

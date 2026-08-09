@@ -7,8 +7,12 @@ export function registerWhoami(server: McpServer, cnk: ClockNext): void {
     "clocknext_whoami",
     {
       title: "ClockNext: identify workspace",
-      description:
-        "Identify the ClockNext organisation behind the configured API key, and — crucially — whether it is a 'sandbox' (a disposable staging twin) or the 'live' organisation. Call this FIRST to confirm you are pointed at the intended workspace before recording any real usage.",
+      description: [
+        "Identify the ClockNext organisation behind the configured API key, and whether it is a 'sandbox' (a disposable staging twin) or the 'live' organisation.",
+        "",
+        "Rules:",
+        "- Call FIRST to confirm you are pointed at the intended workspace before recording any real usage.",
+      ].join("\n"),
       inputSchema: {},
     },
     async () => {
