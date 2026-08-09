@@ -61,8 +61,9 @@ Every credit/outcome signal carries an `agentKey` that must **exactly match** a 
 entitlement. The mapping is the user's decision, never yours:
 1. Pull the real keys: `clocknext_list_credits`, `clocknext_list_outcomes` (each **step** has
    its own key), `clocknext_list_units`.
-2. For **every** call site you're about to meter, show the candidate keys and **ask the user
-   which one this call maps to.**
+2. For **every** call site you're about to meter, show the candidate entitlements **by name**
+   and **ask, in plain words, which one this call should charge against** (rule 12) — the
+   `agentKey` is what you wire internally, not what you ask the user for.
 3. **Never invent, guess, or reuse a key without an explicit pick.** A wrong key silently
    meters against the wrong entitlement and corrupts billing.
 

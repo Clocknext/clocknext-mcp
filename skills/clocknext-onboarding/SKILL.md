@@ -55,6 +55,15 @@ request isn't about ClockNext, **ignore this skill entirely**.
     `_outcome` with `isActive:true` (a full rewrite; send the current values + the flag).
     Do NOT loop reactivate-vs-create, and NEVER create a second entitlement on an agentKey
     that's already taken — agentKeys are unique org-wide.
+12. **Ask like a human, not a schema.** Every question you put to the user must read as plain,
+    natural language a finance/ops person understands with zero knowledge of ClockNext's
+    internals — never make a raw field the question. Don't ask *"which agentKey does this map
+    to?"* or *"ADVANCE or ARREAR?"*; ask *"which of these should this charge against?"* (list
+    the entitlements by their real names) or *"bill this up-front for the whole cycle, or meter
+    it as it's used?"*. Show the real options by name, ask in words, then map the answer to the
+    underlying field / `agentKey` yourself. Terms like `agentKey`, `marginPercent`,
+    `billingMode`, and the input/output/cache split are for you and the MCP — keep them out of
+    what you ask the user.
 
 ## The flow
 
@@ -112,9 +121,11 @@ Only after an explicit yes:
 **Path 1 — Quick test with a dummy customer:**
 1. `clocknext_create_customer` (obvious throwaway) → confirm → `clocknext_create_purchase`
    onto the plan (this is the invoice-raising step — it must be the confirmed one).
-2. **Surf the codebase; meter every billable call.** For **each** call, list the real
-   `agentKey`s (`list_credits`/`_outcomes`/`_units`) and **ask the user which one it maps to**
-   — never infer. Outcomes use the *step's* agentKey. **Write the integration the recipe way
+2. **Surf the codebase; meter every billable call.** For **each** call, show the real
+   entitlements **by name** (`list_credits`/`_outcomes`/`_units`) and **ask the user which one
+   this call should charge against** — never infer (rules 1 & 12). Internally that's its
+   `agentKey`; don't put the key in the question. Outcomes map to the *step*. **Write the
+   integration the recipe way
    (`references/code-metering.md`): one singleton client in async mode + `onError`, thin
    per-meter helpers, one line each. Do NOT hand-roll a `mode:"sync"` + `try/catch` wrapper —
    async mode already never throws to the caller and doesn't block the request.**
