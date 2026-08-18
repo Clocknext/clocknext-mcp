@@ -1,12 +1,21 @@
 {
   "name": "clocknext",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Meter usage and manage usage-based billing from AI coding tools via the ClockNext API.",
-  "author": { "name": "ClockNext", "email": "dev@clocknext.com" },
+  "author": {
+    "name": "ClockNext",
+    "email": "dev@clocknext.com"
+  },
   "homepage": "https://github.com/ClockNext/clocknext-mcp",
   "repository": "https://github.com/ClockNext/clocknext-mcp",
   "license": "MIT",
-  "keywords": ["clocknext", "billing", "metering", "usage-based-billing", "mcp"],
+  "keywords": [
+    "clocknext",
+    "billing",
+    "metering",
+    "usage-based-billing",
+    "mcp"
+  ],
   "userConfig": {
     "api_key": {
       "type": "string",
@@ -25,7 +34,9 @@
   "mcpServers": {
     "clocknext": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"],
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/index.js"
+      ],
       "env": {
         "CLOCKNEXT_API_KEY": "${user_config.api_key}",
         "CLOCKNEXT_DOCS_URL": "${user_config.docs_url}"
