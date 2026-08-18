@@ -122,13 +122,16 @@ Details: `references/pricing-and-models.md`.
 ### 2 — Entitlements (repeat until the user is happy)  *(why: entitlements are what you actually sell — they define how usage turns into money)*
 First **reconcile with what exists** (rule 11) — reactivate/adjust before creating new.
 Explain the **three** types and their fit *in terms of the user's product*, then ask which
-they want (several is fine):
+they want (several is fine). The map + a which-one decision guide is
+`references/entitlements.md`; each has a deep reference (pricing math, tool fields, worked
+examples) — open it before you price or explain that type:
 - **Credit** — token-metered balance, drawn down per call by real token cost. For variable,
-  token-shaped usage (chat turns, generations).
+  token-shaped usage (chat turns, generations). Deep: `references/credit.md`.
 - **Outcome** — billed per *completed* multi-LLM-step deliverable. Every step is an LLM step;
-  a **non-LLM / fixed-cost event is a UNIT, not an outcome step.**
+  a **non-LLM / fixed-cost event is a UNIT, not an outcome step.** Deep: `references/outcome.md`.
 - **Unit** — fixed price per *event*, no tokens (an upload, an export, a seat). Priced FLAT
-  or tiered. **FLAT lives here.**
+  or tiered (SLAB vs VOLUME differ a lot — see the worked table). **FLAT lives here.**
+  Deep: `references/unit.md`.
 
 For each chosen entitlement, offer the choice and say why you'd lean a given way:
 - **Manually** — `{base}/credits` / `{base}/outcomes` / `{base}/units`. Lean this way for
@@ -141,8 +144,7 @@ For each chosen entitlement, offer the choice and say why you'd lean a given way
 > **Wallet** isn't one of the three — it's a plan component: prepaid USD debited at raw model
 > cost. Say it plainly: **wallet carries no margin — no profit on wallet spend.** Unit-FLAT
 > (per event) ≠ plan-FLAT (one-off). A wallet can also *fund metered usage* — see the
-> wallet-funded-arrear option in step 3 (`walletFundedArrear`). Full breakdown:
-> `references/entitlements.md`.
+> wallet-funded-arrear option in step 3 (`walletFundedArrear`). Deep: `references/wallet.md`.
 
 ### 3 — Plan  *(why: the plan is what a customer actually subscribes to — it bundles the entitlements and sets what they pay)*
 A plan bundles entitlements (+ optional WALLET / FLAT components) and sets the price. Offer
@@ -157,6 +159,8 @@ end-of-cycle usage invoice?"* — and if they say yes, set `walletFundedArrear:t
 works when the plan has a metered (ARREAR) credit/outcome/unit AND an up-front (ADVANCE) wallet
 (the backend rejects it otherwise), and remember wallet spend still carries no margin.
 Confirm the composition, then create it **active** (rule 5) — unless they asked to review.
+
+Details (components, ADVANCE vs ARREAR, cost composition, `priceAdjustment`): `references/plans.md`.
 
 ### 4 — Customer + code  ⛔ REAL-MONEY GATE  *(why: this is the first step that can cost real money — a purchase raises a real invoice)*
 **Before anything here, STOP and get an explicit go-ahead (rule 3).** State it plainly:

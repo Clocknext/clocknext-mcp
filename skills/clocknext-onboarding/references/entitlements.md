@@ -1,57 +1,51 @@
-# Entitlement types — credit vs outcome vs unit (and wallet, flat)
+# Entitlements & billing building blocks — the map
 
-ClockNext has **three catalogue entitlements** you create and price, plus two plan-level
-components (wallet, flat). Ground everything in the docs (`clocknext_search_docs kind=concept`)
-before explaining — this is a summary, not the source of truth.
+ClockNext bills a product out of a small set of building blocks. This file is the **decision
+guide** — what each one is, and which to reach for. Each has its own deep reference (pricing
+math, exact MCP tool fields, runtime signal, worked examples); open the one you're working on.
 
-## Credit
-A **token-metered balance**. Each billable call draws credits down in proportion to its real
-token cost. Use when pricing is "credits" / "tokens" / general metered AI usage.
-- Priced from a **model bundle**: pick enabled model(s), a token volume + input/output/cache
-  split; that gives a base price; a **margin %** on top gives the price per credit.
-- Runtime signal: `signals.credit({ agentKey, model, tokens })`.
+Ground anything you're unsure about in the docs first (`clocknext_search_docs kind=concept`) —
+this is a curated summary, not the source of truth.
 
-## Outcome
-Billed per **completed deliverable** made of 1–50 **steps**. You charge when the outcome
-completes, not per call. Use for "per workflow / per job / per result" pricing — e.g. "$5 per
-contract reviewed", where review = extract → analyse → summarise.
-- Each **step** has its own `agentKey` and its own base-price bundle; the outcome's base price
-  is the sum of step base prices, + margin.
-- Runtime signal: `signals.outcome({ agentKey: <step key>, model, tokens })` — one call
-  advances one step.
+## The blocks
 
-## Unit
-A **fixed price per event, no tokens.** Seats, reports generated, actions taken — anything
-that isn't token-shaped. **This is where FLAT lives.** Unit pricing options:
-- **FLAT** — one price per event (`flatPrice`). The default, simplest unit.
-- **SLAB** — tiered; each tier's rate applies only to the volume within that tier.
-- **VOLUME** — tiered; the tier the total lands in sets the rate for all of it.
-- 1–50 tiers for SLAB/VOLUME; only the last tier may be unbounded.
-- Runtime signal: the **customer's product** calls `signals.unit({ agentKey })` (SDK) or
-  `POST /api/v1/units` (REST) — one call = one unit. **Never metered via the MCP.**
+| Block | Kind | One-line | Deep reference |
+| --- | --- | --- | --- |
+| **Credit** | catalogue entitlement | Token-metered balance, drawn down per call by real token cost (+ your margin). | [`credit.md`](credit.md) |
+| **Outcome** | catalogue entitlement | Billed once per *completed* multi-step LLM deliverable. | [`outcome.md`](outcome.md) |
+| **Unit** | catalogue entitlement | Fixed price per *event*, no tokens — FLAT / SLAB / VOLUME pricing. | [`unit.md`](unit.md) |
+| **Wallet** | plan component | Prepaid USD balance, debited at **raw** model cost (no margin). Can also fund metered usage. | [`wallet.md`](wallet.md) |
+| **Flat** | plan component | A one-off fee on the plan (e.g. setup). | [`plans.md`](plans.md) |
+| **Plan** | the wrapper | Bundles the above into what a customer subscribes to and pays for. | [`plans.md`](plans.md) |
 
-## Wallet (plan component — NOT a catalogue entitlement)
-A **prepaid USD balance** debited at the **raw model cost**. State it plainly to the user:
-**wallet carries NO margin — you make no profit on wallet spend.** It's pure pass-through
-cost ("top up $X, burn it down at cost"). Add it as a plan component, not via the catalogue.
+**Catalogue entitlements** (credit / outcome / unit) are created and priced on their own, then
+referenced by a plan. **Wallet** and **flat** aren't catalogue objects — they exist only as
+components *inside* a plan. See [`plans.md`](plans.md) for how it all composes.
 
-### Wallet-funded metered usage (`walletFundedArrear`)
-By default a plan's **metered (ARREAR)** credit/outcome/unit usage is billed as a **separate
-invoice at cycle end**. As a plan-level billing-design option you can instead have that metered
-usage **drawn from the prepaid wallet as it happens** — set `walletFundedArrear:true` on the
-plan (see `SKILL.md` step 3). Then there's **one invoice per cycle**: the wallet funds usage in
-real time, may go **negative** mid-cycle, and the **next cycle's wallet top-up absorbs the
-overdraft**. The backend accepts it only when the plan has **(1)** at least one ARREAR
-credit/outcome/unit, **(2)** a WALLET component, and **(3)** that wallet is **ADVANCE**
-(up-front) — a metered wallet is rejected as double-billing. Because the wallet debits at raw
-cost, usage funded this way still earns **no margin** — reach for it when you want simple
-prepaid cost pass-through, not margin-bearing metering.
+## Which one? — decide by how the customer's billing "sounds"
 
-## Flat (plan component)
-A one-off fee on the plan (e.g. a setup fee). Do not confuse with a **unit** priced FLAT: the
-unit-FLAT is charged **per event**; the plan-FLAT is a **single** charge on the plan.
+- *"credits" / "tokens" / "pay for AI usage"* → **Credit**. Variable, token-shaped spend with a
+  margin. → [`credit.md`](credit.md)
+- *"$X per job / per workflow / per result / per document processed"*, where the job is several
+  LLM steps → **Outcome**. You charge only when the whole thing finishes. → [`outcome.md`](outcome.md)
+- *"$X per report / per seat / per export / per action"* — a discrete event with **no tokens**
+  → **Unit**. Flat per event, or tiered (SLAB/VOLUME). → [`unit.md`](unit.md)
+- *"top up a balance and burn it down at cost"* → **Wallet** (prepaid, no margin). → [`wallet.md`](wallet.md)
+- *"a setup / onboarding fee"* → a **FLAT** plan component (≠ a unit priced FLAT). → [`plans.md`](plans.md)
 
-## Mixed / multiple
-A product can use several entitlements and more than one of each — e.g. a "chat" credit + a
-"reports" unit + a "contract-review" outcome. Create them one at a time, confirming each, and
-loop until the user says the catalogue is complete.
+### The two easy-to-confuse pairs — get these right
+- **Unit-FLAT vs plan-FLAT.** A **unit** priced FLAT charges **per event** (10 exports = 10×).
+  A **plan FLAT component** is a **single** charge on the plan (one setup fee). Different things.
+- **Outcome step vs unit.** Every **outcome step is an LLM step** (token-priced). A fixed-cost,
+  non-LLM event (an upload, an export) is a **unit**, never an outcome step.
+
+## Mixing them
+A product can use several blocks, and more than one of each — e.g. a "chat" **credit** + a
+"reports" **unit** + a "contract-review" **outcome**, all bundled in one plan with a prepaid
+**wallet**. Create each catalogue entitlement one at a time (confirm each), then assemble the
+plan. Loop until the user says the catalogue is complete.
+
+## Pricing is always model-grounded
+Credit and outcome prices are **computed from a model mixer**, never hand-typed — see
+[`pricing-and-models.md`](pricing-and-models.md) for the formula and the enable-a-model step.
+Unit prices are set directly (they're not token-based). Wallet carries no price at all (raw cost).
