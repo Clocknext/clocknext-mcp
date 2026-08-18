@@ -22440,7 +22440,15 @@ var planInput = {
   name: external_exports.string().describe("Plan name."),
   description: external_exports.string().nullish().describe("Optional description."),
   billingCycle: external_exports.enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "YEARLY", "EVERY_5_MIN", "FREE"]).describe("Billing cadence."),
-  carryForward: external_exports.boolean().optional().describe("Carry an unused balance into the next cycle. Default true."),
+  carryForward: external_exports.boolean().optional().describe(
+    "DEPRECATED \u2014 still accepted for back-compat but no longer read by the backend; setting it has no effect (carry-forward is fixed policy now: wallet money carries, allowances reset)."
+  ),
+  walletFundedArrear: external_exports.boolean().optional().describe(
+    "Wallet-funded metering. Default false. When true, every metered (ARREAR) CREDIT/OUTCOME/UNIT component is paid FROM the customer's prepaid WALLET as usage happens \u2014 one invoice per cycle \u2014 instead of a separate arrear invoice at cycle end. The wallet may go negative mid-cycle; the next cycle's wallet top-up absorbs the overdraft. Backend rejects (422) unless ALL THREE hold: (1) the plan has at least one ARREAR credit/outcome/unit component; (2) the plan has a WALLET component; (3) that WALLET component is billingMode ADVANCE (a metered/ARREAR wallet is refused as double-billing). Wallet still debits at raw model cost (NO margin), so usage funded this way earns no margin \u2014 use it for prepaid cost pass-through, not margin-bearing metering."
+  ),
+  priceAdjustment: external_exports.number().optional().describe(
+    "Signed rounding nudge (USD) on the plan's computed due-at-purchase price \u2014 negative discounts, positive adds (e.g. -0.01 to land on a round number). Default 0; coerced to 0 for FREE / all-ARREAR plans that have no advance total to round. Leave unset unless you need to tidy a rounding edge."
+  ),
   currencyCode: external_exports.string().optional().describe("ISO 4217 (3 letters). Default USD."),
   isActive: external_exports.boolean().optional().describe("Whether the plan is active/sellable."),
   components: external_exports.array(planComponent).min(1).describe(
@@ -22620,6 +22628,7 @@ function registerCatalogueTools(server, cnk) {
         "Rules:",
         "- Create referenced credits/outcomes/units first (clocknext_create_credit / _outcome / _unit), then pass their ids.",
         "- Each component's billingMode is ADVANCE (up-front, needs amount/quantity) or ARREAR (metered).",
+        "- Set walletFundedArrear:true to pay metered (ARREAR) usage from the plan's prepaid WALLET as it happens (one invoice/cycle, wallet may go negative) instead of a separate cycle-end arrear invoice. Requires >=1 ARREAR credit/outcome/unit AND an ADVANCE WALLET component, or the backend rejects it (422).",
         "- FREE plans must be ADVANCE-only with no FLAT component.",
         "- Creates a real, sellable plan \u2014 get pricing right first. Prefer the dashboard plan builder (https://payments.clocknext.com/plans); this is the fallback."
       ].join("\n"),
@@ -22628,6 +22637,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Full rewrite, not a patch \u2014 omitted fields are dropped. Read it first with clocknext_get_plan, edit, then send the whole thing back.",
+        "- walletFundedArrear is part of that full definition \u2014 re-send it (with the ADVANCE WALLET + ARREAR components it requires) or it reverts to false. carryForward is deprecated and ignored.",
         "- Changes apply going forward; customers already on the plan keep their terms."
       ].join("\n"),
       archive: [

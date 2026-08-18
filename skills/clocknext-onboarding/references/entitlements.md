@@ -35,6 +35,18 @@ A **prepaid USD balance** debited at the **raw model cost**. State it plainly to
 **wallet carries NO margin — you make no profit on wallet spend.** It's pure pass-through
 cost ("top up $X, burn it down at cost"). Add it as a plan component, not via the catalogue.
 
+### Wallet-funded metered usage (`walletFundedArrear`)
+By default a plan's **metered (ARREAR)** credit/outcome/unit usage is billed as a **separate
+invoice at cycle end**. As a plan-level billing-design option you can instead have that metered
+usage **drawn from the prepaid wallet as it happens** — set `walletFundedArrear:true` on the
+plan (see `SKILL.md` step 3). Then there's **one invoice per cycle**: the wallet funds usage in
+real time, may go **negative** mid-cycle, and the **next cycle's wallet top-up absorbs the
+overdraft**. The backend accepts it only when the plan has **(1)** at least one ARREAR
+credit/outcome/unit, **(2)** a WALLET component, and **(3)** that wallet is **ADVANCE**
+(up-front) — a metered wallet is rejected as double-billing. Because the wallet debits at raw
+cost, usage funded this way still earns **no margin** — reach for it when you want simple
+prepaid cost pass-through, not margin-bearing metering.
+
 ## Flat (plan component)
 A one-off fee on the plan (e.g. a setup fee). Do not confuse with a **unit** priced FLAT: the
 unit-FLAT is charged **per event**; the plan-FLAT is a **single** charge on the plan.
