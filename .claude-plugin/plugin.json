@@ -1,13 +1,13 @@
 {
   "name": "clocknext",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Meter usage and manage usage-based billing from AI coding tools via the ClockNext API.",
   "author": {
     "name": "ClockNext",
     "email": "dev@clocknext.com"
   },
-  "homepage": "https://github.com/ClockNext/clocknext-mcp",
-  "repository": "https://github.com/ClockNext/clocknext-mcp",
+  "homepage": "https://github.com/Clocknext/clocknext-mcp",
+  "repository": "https://github.com/Clocknext/clocknext-mcp",
   "license": "MIT",
   "keywords": [
     "clocknext",
