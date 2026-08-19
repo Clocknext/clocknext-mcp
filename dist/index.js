@@ -22953,6 +22953,7 @@ function registerCustomerTools(server, cnk) {
         "Subscribe a customer to a plan (a 'purchase') \u2014 this activates the plan for that customer. Used to wire up a dummy customer before firing test signals.",
         "",
         "Rules:",
+        "- \u26D4 Raises a REAL invoice (real money on a live org). Only call this after the user explicitly approved this purchase in a question dedicated to it alone \u2014 never bundled with another question, never inferred from an earlier yes.",
         "- Do this after clocknext_create_customer + clocknext_create_plan.",
         "- A usage signal only prices if the customer has an active plan whose components match the meter (credit / outcome / unit)."
       ].join("\n"),
@@ -23161,7 +23162,7 @@ function registerRecordUsage(server, cnk) {
         "Record ONE real usage signal. Prices the tokens against the model and the customer's plan and returns the resulting usage log.",
         "",
         "Rules:",
-        "- Bills for real. For a no-op price preview, use clocknext_verify_signal instead.",
+        "- \u26D4 Bills for real. Only call this after the user explicitly approved THIS signal in a question dedicated to it alone, in this conversation \u2014 an earlier or bundled 'yes' (e.g. to a purchase) does NOT count. For a no-op price preview, use clocknext_verify_signal instead.",
         "- Reuse the SAME idempotencyKey across retries of one event so a lost response can't double-record it."
       ].join("\n"),
       inputSchema: {
@@ -23373,7 +23374,7 @@ function registerWriteEnv(server) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.7.2" });
+  const server = new McpServer({ name: "clocknext", version: "0.7.3" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);

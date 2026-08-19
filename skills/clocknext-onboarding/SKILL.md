@@ -25,6 +25,41 @@ Any ClockNext work: setting up billing, adding models, creating/pricing entitlem
 plans, metering calls, wiring the SDK/API into a codebase, or onboarding customers. If a
 request isn't about ClockNext, **ignore this skill entirely**.
 
+## The cadence — a one-on-one interview, ONE step per turn (MUST follow)
+
+This flow is a turn-based interview, not a pipeline. You MUST NOT batch steps — and this
+applies **identically in auto / full-permission / bypass mode**: permission modes silence
+tool prompts, never decisions. Every turn has exactly this shape:
+
+1. **Acknowledge** the user's last answer in one line ("Good — staying on sandbox.").
+2. **Announce** the ONE next step and why, in one sentence — even when it needs no
+   approval ("Now I'm going to scan the codebase for the models it calls, so we know
+   what to enable in ClockNext.").
+3. **Do only that step.**
+4. **Report** what you found or did, then **ask exactly ONE question** — and STOP. Do
+   not start the next step in the same turn.
+
+Hard rules:
+- **One question per dialog.** NEVER put two questions in one AskUserQuestion call, and
+  never fold two decisions into one question. A money go-ahead (rule 3) shares its
+  dialog with NOTHING.
+- **An answer authorizes exactly the step it was asked about.** It is never momentum to
+  roll into the next step unannounced.
+- A step with no decision still gets its announce-before and report-after.
+
+The shape, concretely:
+
+> **You:** "You're on the **LIVE** org 'Acme' — purchases raise real invoices here;
+> sandbox is a disposable twin. Build on live, or test on sandbox first?" ⏸ *wait*
+> **User:** "Live."
+> **You:** "Good — staying on live. **Next I'll scan the codebase for every model it
+> calls**, so we know what to enable in ClockNext." → *scan* → "It calls `gpt-4o`
+> (OpenAI) and `claude-sonnet-4-6` (Anthropic); neither is enabled yet. **Shall I add
+> them via the MCP, or will you add them yourself on the Models page?**" ⏸ *wait*
+
+Every step in "The flow" below runs through this cadence — the ⏸ moments are written
+into the steps, but the announce/report framing applies even where not restated.
+
 ## Manually vs Automatically via MCP — the choice you offer at every build step
 Every time you're about to **create or change org state** (enable a model, create/price a
 credit / outcome / unit, build a plan, create a customer, subscribe them), you don't just do
@@ -62,11 +97,16 @@ step. Ask fresh, briefly, per step.
    customer / purchase before creating it, and let the user pick Manual vs Automatic (above).
    **You may NEVER invent or auto-assign an `agentKey`** — it is always chosen by the user
    from real, already-created entitlements.
-3. **Hard stop before spending money.** A **purchase raises a real invoice**, and on a LIVE
-   org that is real money. NEVER create a customer, purchase, or fire a real (non-dry-run)
-   signal without an **explicit, separate go-ahead for that step** — spell out exactly what
-   becomes real ("this creates a customer and a $X invoice on your live org") and wait. Do
-   NOT roll into customer/testing on your own momentum.
+3. **Hard stop before spending money — TWO gates, each its OWN dialog.** A **purchase
+   raises a real invoice**, and on a LIVE org that is real money. There are two distinct
+   money moments, and each needs its own explicit go-ahead, **asked alone** (never bundled
+   with any other question — cadence rule):
+   - **⛔ Gate 1 — customer + purchase.** Spell out exactly what becomes real ("this
+     creates a customer and a $X invoice on your live org") and wait.
+   - **⛔ Gate 2 — the first real (non-dry-run) signal.** Approving the purchase does NOT
+     approve spending usage. After the dry run, ask again before firing anything real
+     ("this will actually draw down the live balance — fire it?") and wait.
+   Do NOT roll into customer/testing on your own momentum.
 4. **Pricing is always model-grounded — never a hand-typed number.** A credit / outcome price
    is computed from a **model mixer** (enabled model + avg tokens + input/output/cache split +
    margin). Whichever way the user picks, the price comes from that mixer: the dashboard
@@ -172,17 +212,18 @@ Confirm the composition, then create it **active** (rule 5) — unless they aske
 
 Details (components, ADVANCE vs ARREAR, cost composition, `priceAdjustment`): `references/plans.md`.
 
-### 4 — Customer + code  ⛔ REAL-MONEY GATE  *(why: this is the first step that can cost real money — a purchase raises a real invoice)*
-**Before anything here, STOP and get an explicit go-ahead (rule 3).** State it plainly:
-*"Next I'll create a customer and subscribe it to the plan — on your LIVE org that raises a
-real $X invoice (auto-payment off, so no card is charged, and we can void it). Proceed?"*
-Only after an explicit yes:
+### 4 — Customer + code  ⛔ REAL-MONEY GATES  *(why: this is where real money starts — a purchase raises a real invoice, and a real signal spends real balance)*
+**Before anything here, STOP and ask Gate 1 (rule 3) — alone, nothing else in the dialog.**
+State it plainly: *"Next I'll create a customer and subscribe it to the plan — on your LIVE
+org that raises a real $X invoice (auto-payment off, so no card is charged, and we can void
+it). Proceed?"* ⏸ *wait.* Only after an explicit yes:
 
 **Path 1 — Quick test with a dummy customer:**
-1. Create the customer (Manually at `{base}/customers`, or Automatically via
-   `clocknext_create_customer` — an obvious throwaway) → confirm → subscribe it to the plan
-   (`clocknext_create_purchase`). **This purchase is the invoice-raising step** — it must be
-   the one the user explicitly approved. Say so as you do it.
+1. Ask **how** — as its own next question: Manually at `{base}/customers`, or Automatically
+   via `clocknext_create_customer` (an obvious throwaway)? ⏸ Then create it → confirm →
+   subscribe it to the plan (`clocknext_create_purchase`). **This purchase is the
+   invoice-raising step** — it must be the one Gate 1 explicitly approved. Say so as you
+   do it.
 2. **Surf the codebase; meter every billable call** (why: any call you miss is un-billed). For
    **each** call, show the real entitlements **by name** (`list_credits`/`_outcomes`/`_units`)
    and **ask the user which one this call should charge against** — never infer (rules 2 & 12).
@@ -200,7 +241,8 @@ Only after an explicit yes:
    line to `.env.example` (placeholder only — never a real key) and make sure `.env` is
    gitignored (the tool refuses to write if it isn't).
 4. **Run-down test:** `clocknext_verify_signal` (dry run — prices without billing, so you
-   catch a mis-wire safely) → then, with a go-ahead, a real call →
+   catch a mis-wire safely) → then **⛔ Gate 2 (rule 3): ask alone and wait** — the
+   purchase yes did NOT cover this — before firing a real call →
    `clocknext_get_customer_usage` / `clocknext_get_customer_balances` to confirm it landed and
    the balance moved. (Unit events aren't metered or read via the MCP — confirm units through
    their **balance** on `clocknext_get_customer_balances`, or in the dashboard.)

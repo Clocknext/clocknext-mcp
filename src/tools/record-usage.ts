@@ -13,7 +13,7 @@ export function registerRecordUsage(server: McpServer, cnk: ClockNext): void {
         "Record ONE real usage signal. Prices the tokens against the model and the customer's plan and returns the resulting usage log.",
         "",
         "Rules:",
-        "- Bills for real. For a no-op price preview, use clocknext_verify_signal instead.",
+        "- ⛔ Bills for real. Only call this after the user explicitly approved THIS signal in a question dedicated to it alone, in this conversation — an earlier or bundled 'yes' (e.g. to a purchase) does NOT count. For a no-op price preview, use clocknext_verify_signal instead.",
         "- Reuse the SAME idempotencyKey across retries of one event so a lost response can't double-record it.",
       ].join("\n"),
       inputSchema: {

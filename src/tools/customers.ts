@@ -177,6 +177,7 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
         "Subscribe a customer to a plan (a 'purchase') — this activates the plan for that customer. Used to wire up a dummy customer before firing test signals.",
         "",
         "Rules:",
+        "- ⛔ Raises a REAL invoice (real money on a live org). Only call this after the user explicitly approved this purchase in a question dedicated to it alone — never bundled with another question, never inferred from an earlier yes.",
         "- Do this after clocknext_create_customer + clocknext_create_plan.",
         "- A usage signal only prices if the customer has an active plan whose components match the meter (credit / outcome / unit).",
       ].join("\n"),

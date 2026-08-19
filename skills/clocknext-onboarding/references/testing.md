@@ -7,8 +7,10 @@ Always dry-run before real traffic, then read the state back. Do all of this on 
    first: it prices **without recording**, so it confirms the customer, model, plan and
    `agentKey` all line up with **zero risk** of a bad bill. Fix any mismatch here before
    sending anything real.
-2. **One real signal** — run the product path (or `clocknext_record_usage`) so a real signal
-   fires for the dummy customer. Why: only real traffic proves the wiring end-to-end.
+2. **One real signal** — ⛔ **money gate 2: ask first, alone, and wait** (the purchase
+   approval did NOT authorize this — a real signal draws down a real balance). Only after
+   that yes, run the product path (or `clocknext_record_usage`) so a real signal fires for
+   the dummy customer. Why: only real traffic proves the wiring end-to-end.
 3. **Read it back** (why: a signal that "sent" isn't proof — you confirm it *landed and moved
    the balance*):
    - `clocknext_get_customer_usage` → the log landed with the expected model, tokens, cost.
