@@ -181,7 +181,14 @@ Only after an explicit yes:
    singleton client in async mode + `onError`, thin per-meter helpers, one line each. Do NOT
    hand-roll a `mode:"sync"` + `try/catch` wrapper — async mode already never throws to the
    caller and doesn't block the request.** Explain that choice so the user trusts the code.
-3. Put the `cnk_` key in the server env (rule 10 — say why it's server-side only).
+3. Put the `cnk_` key in the server env (rule 10 — say why it's server-side only). Offer the
+   choice: **Manually** — the user copies the same `cnk_…` key they configured for this MCP
+   server into the project's `.env` themselves. Or **Automatically via MCP** —
+   `clocknext_write_env` writes the key from the server's own environment straight into the
+   project's `.env`; **either way the key never enters your context, and you never ask the
+   user to paste it to you.** Whichever they pick, add a `CLOCKNEXT_API_KEY=` placeholder
+   line to `.env.example` (placeholder only — never a real key) and make sure `.env` is
+   gitignored (the tool refuses to write if it isn't).
 4. **Run-down test:** `clocknext_verify_signal` (dry run — prices without billing, so you
    catch a mis-wire safely) → then, with a go-ahead, a real call →
    `clocknext_get_customer_usage` / `clocknext_get_customer_balances` to confirm it landed and

@@ -56,6 +56,20 @@ Call them on the **server**, at the billable boundary, **after** the work succee
 - **Preflight** before real traffic → `cnk.signals.verify(signal)` (dry run, records nothing).
 - **At-least-once** (queues/your own retries) → pass your own stable `idempotencyKey`.
 
+## Getting the key into `.env` (the key never enters your context)
+The recipe above reads `process.env.CLOCKNEXT_API_KEY` at runtime — you never need the
+literal key to write the code. To get it into the project, offer the usual choice:
+- **Manually** — the user copies the same `cnk_…` key they configured for this MCP server
+  into the project's `.env`.
+- **Automatically via MCP** — `clocknext_write_env { envFilePath }`: the server copies the
+  key from its own environment into the file server-side and returns only `ok` — the key
+  never appears in the conversation. It only accepts files named `.env`, `.env.local`, or
+  `.env.development[.local]`, and refuses when the file is git-tracked or not gitignored
+  (fix `.gitignore`, then retry).
+
+Either way: add a `CLOCKNEXT_API_KEY=` **placeholder** to `.env.example` (never a real key),
+confirm `.env` is gitignored (rule 10), and never ask the user to paste the key into the chat.
+
 ## The agentKey rule (human-in-the-loop — do NOT get this wrong)
 Every credit/outcome signal carries an `agentKey` that must **exactly match** a created
 entitlement. The mapping is the user's decision, never yours:

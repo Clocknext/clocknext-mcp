@@ -10,6 +10,7 @@ import { registerRecordUsage } from "./tools/record-usage";
 import { registerSearchDocs } from "./tools/search-docs";
 import { registerVerifySignal } from "./tools/verify-signal";
 import { registerWhoami } from "./tools/whoami";
+import { registerWriteEnv } from "./tools/write-env";
 
 /**
  * ClockNext MCP server (stdio).
@@ -22,7 +23,7 @@ import { registerWhoami } from "./tools/whoami";
 async function main(): Promise<void> {
   const cnk = makeClient(); // throws with a clear message if the key is missing
 
-  const server = new McpServer({ name: "clocknext", version: "0.7.1" });
+  const server = new McpServer({ name: "clocknext", version: "0.7.2" });
 
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   registerCatalogueTools(server, cnk); // CRUD for plans/credits/outcomes/units
   registerCustomerTools(server, cnk); // customers, purchases, bulk import
   registerAddModel(server, cnk); // enable a model (autopriced); reads price back to warn on $0
+  registerWriteEnv(server); // writes the cnk_ key into a project .env server-side — key never enters context
 
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");

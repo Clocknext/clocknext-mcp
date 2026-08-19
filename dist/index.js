@@ -2980,7 +2980,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve2.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3007,7 +3007,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve2(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3638,7 +3638,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve2(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const { parsed: baseParsed, malformedAuthorityOrPort: baseMalformed } = parseWithStatus(baseURI, schemelessOptions);
       const { parsed: relativeParsed, malformedAuthorityOrPort: relativeMalformed } = parseWithStatus(relativeURI, schemelessOptions);
@@ -3922,7 +3922,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve2,
       resolveComponent,
       equal,
       serialize,
@@ -6898,12 +6898,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs, exportName) {
+    function addFormats(ajv, list, fs2, exportName) {
       var _a;
       var _b;
       (_a = (_b = ajv.opts.code).formats) !== null && _a !== void 0 ? _a : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs[f]);
+        ajv.addFormat(f, fs2[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -19018,7 +19018,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -19035,7 +19035,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -19113,7 +19113,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve(parseResult.data);
+            resolve2(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -19374,12 +19374,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve2, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -20470,7 +20470,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -21134,12 +21134,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve();
+        resolve2();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve2);
       }
     });
   }
@@ -21362,7 +21362,7 @@ function computeBackoff(attempt, opts, retryAfterMs, rand = Math.random) {
   return Math.round(capped * (0.5 + rand() * 0.5));
 }
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve2) => setTimeout(resolve2, ms));
 }
 var SDK_VERSION = "0.6.0";
 var Transport = class {
@@ -23282,10 +23282,98 @@ function registerWhoami(server, cnk) {
   );
 }
 
+// src/tools/write-env.ts
+import { promises as fs } from "fs";
+import { basename, dirname, isAbsolute, resolve } from "path";
+import { spawnSync } from "child_process";
+var ALLOWED_NAMES = /* @__PURE__ */ new Set([".env", ".env.local", ".env.development", ".env.development.local"]);
+var KEY_LINE_RE = /^\s*(?:export\s+)?CLOCKNEXT_API_KEY\s*=.*$/m;
+function gitGuard(fileAbs) {
+  const run = (args) => spawnSync("git", args, { cwd: dirname(fileAbs), encoding: "utf8", timeout: 5e3 });
+  const inRepo = run(["rev-parse", "--is-inside-work-tree"]);
+  if (inRepo.error || inRepo.status !== 0) return null;
+  if (run(["ls-files", "--error-unmatch", "--", fileAbs]).status === 0) {
+    return "the file is tracked by git \u2014 a committed .env would publish the key. Untrack it (`git rm --cached`) and gitignore it, then retry.";
+  }
+  if (run(["check-ignore", "-q", "--", fileAbs]).status !== 0) {
+    return "the file is not covered by .gitignore \u2014 it could be committed with the key inside. Add it to .gitignore, then retry.";
+  }
+  return null;
+}
+function registerWriteEnv(server) {
+  server.registerTool(
+    "clocknext_write_env",
+    {
+      title: "ClockNext: write the API key into a project .env",
+      description: [
+        "Write `CLOCKNEXT_API_KEY=<the org's cnk_\u2026 key>` into a project's `.env` file, server-side. The key is copied from this MCP server's own environment directly into the file \u2014 it is NEVER returned to you and never appears in the conversation. Use this as the last integration step so the code you generated (which reads `process.env.CLOCKNEXT_API_KEY`) can run; the alternative is the user pasting the key themselves.",
+        "",
+        "Rules:",
+        "- The target must be named exactly `.env`, `.env.local`, `.env.development`, or `.env.development.local`.",
+        "- Inside a git repo the file must be untracked and gitignored, otherwise the tool refuses (a committed .env would leak the key). Fix .gitignore first, then retry.",
+        "- An existing `CLOCKNEXT_API_KEY=` line is replaced in place; otherwise the line is appended. Nothing else in the file is touched.",
+        "- Put only a `CLOCKNEXT_API_KEY=` placeholder in `.env.example` yourself \u2014 never ask the user to tell you the real key."
+      ].join("\n"),
+      inputSchema: {
+        envFilePath: external_exports.string().min(1).refine((p) => ALLOWED_NAMES.has(basename(p)), {
+          message: "envFilePath must point at a file named .env, .env.local, .env.development, or .env.development.local"
+        }).describe(
+          "Path to the project's env file, e.g. '/path/to/project/.env'. Prefer an absolute path; a relative one resolves against the MCP server's working directory, which may not be the project."
+        )
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ envFilePath }) => {
+      const apiKey = process.env.CLOCKNEXT_API_KEY;
+      if (!apiKey) {
+        return errorResult("CLOCKNEXT_API_KEY is not set in the MCP server's environment \u2014 nothing to write.");
+      }
+      const fileAbs = isAbsolute(envFilePath) ? envFilePath : resolve(envFilePath);
+      try {
+        const parent = await fs.stat(dirname(fileAbs)).catch(() => null);
+        if (!parent?.isDirectory()) {
+          return errorResult(`Directory does not exist: ${dirname(fileAbs)}`);
+        }
+        const refusal = gitGuard(fileAbs);
+        if (refusal) return errorResult(`Refusing to write the key: ${refusal}`);
+        const existing = await fs.readFile(fileAbs, "utf8").catch(() => null);
+        const line = `CLOCKNEXT_API_KEY=${apiKey}`;
+        let action;
+        if (existing == null) {
+          await fs.writeFile(fileAbs, `${line}
+`, { encoding: "utf8", mode: 384 });
+          action = "created";
+        } else if (KEY_LINE_RE.test(existing)) {
+          await fs.writeFile(fileAbs, existing.replace(KEY_LINE_RE, line), "utf8");
+          action = "replaced";
+        } else {
+          const sep = existing.endsWith("\n") || existing === "" ? "" : "\n";
+          await fs.appendFile(fileAbs, `${sep}${line}
+`, "utf8");
+          action = "appended";
+        }
+        return jsonResult({
+          ok: true,
+          path: fileAbs,
+          action,
+          note: "CLOCKNEXT_API_KEY written server-side; the key was not returned. Remember a CLOCKNEXT_API_KEY= placeholder in .env.example."
+        });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+}
+
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.7.1" });
+  const server = new McpServer({ name: "clocknext", version: "0.7.2" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
@@ -23295,6 +23383,7 @@ async function main() {
   registerCatalogueTools(server, cnk);
   registerCustomerTools(server, cnk);
   registerAddModel(server, cnk);
+  registerWriteEnv(server);
   await server.connect(new StdioServerTransport());
   console.error("[clocknext-mcp] ready on stdio");
 }
