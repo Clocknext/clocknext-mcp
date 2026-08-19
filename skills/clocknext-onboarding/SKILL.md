@@ -1,6 +1,16 @@
 ---
 name: clocknext-onboarding
-description: Guide a product end-to-end onto ClockNext usage-based billing using the ClockNext MCP tools — detect and enable the models it uses, create entitlements (credits / outcomes / units) and a plan, then meter every billable call in the codebase and prove it with a dummy customer and live signals. Fully human-in-the-loop: for every setup step the user chooses to do it Manually (in the ClockNext dashboard) or Automatically via the MCP, and a hard stop guards anything that spends real money. Use whenever the user is doing anything with ClockNext — setting up billing, creating or pricing credits/outcomes/units/plans, adding models, metering or charging for LLM/API calls, wiring agentKey or customerId into their app, or onboarding customers. If the request has nothing to do with ClockNext, ignore this skill.
+description: >-
+  Guide a product end-to-end onto ClockNext usage-based billing using the ClockNext MCP
+  tools — detect and enable the models it uses, create entitlements (credits / outcomes /
+  units) and a plan, then meter every billable call in the codebase and prove it with a
+  dummy customer and live signals. Fully human-in-the-loop — for every setup step the user
+  chooses to do it Manually (in the ClockNext dashboard) or Automatically via the MCP, and
+  a hard stop guards anything that spends real money. Use whenever the user is doing
+  anything with ClockNext — setting up billing, creating or pricing
+  credits/outcomes/units/plans, adding models, metering or charging for LLM/API calls,
+  wiring agentKey or customerId into their app, or onboarding customers. If the request
+  has nothing to do with ClockNext, ignore this skill.
 ---
 
 # Onboard a product onto ClockNext usage-based billing
