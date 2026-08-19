@@ -18,7 +18,9 @@ export function errorResult(message: string) {
 /** Turn any thrown value into a helpful one-line message for the agent. */
 export function errMsg(err: unknown): string {
   if (err instanceof ClockNextError) {
-    return `ClockNext API error${err.status ? ` (${err.status})` : ""}: ${err.message}`;
+    // Include the subclass (AuthError, AllowanceError, RateLimitError, …) so
+    // callers can branch on the kind, not just the shared status code.
+    return `ClockNext ${err.constructor.name}${err.status ? ` (${err.status})` : ""}: ${err.message}`;
   }
   return err instanceof Error ? err.message : String(err);
 }

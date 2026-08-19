@@ -2,7 +2,8 @@
 
 A **plan** bundles the building blocks into what a customer actually buys and pays. It's a list
 of **components** plus a billing cycle and currency. A purchase (subscription) raises a real
-invoice, so plans are the last thing you build before the [real-money gate](../SKILL.md).
+invoice, so plans are the last thing you build before the real-money gates (Gate 1 = the
+purchase, Gate 2 = the first real signal — [SKILL.md](../SKILL.md) rule 3, each asked alone).
 
 ## Components
 Each component is one of five types, in one of two billing modes.
@@ -28,7 +29,7 @@ Each component is one of five types, in one of two billing modes.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `name` | yes | Plan name. |
-| `billingCycle` | yes | `MONTHLY` \| `QUARTERLY` \| `SEMI_ANNUAL` \| `YEARLY` \| `EVERY_5_MIN` \| `FREE`. |
+| `billingCycle` | yes | `MONTHLY` \| `QUARTERLY` \| `SEMI_ANNUAL` \| `YEARLY` \| `EVERY_5_MIN` \| `FREE`. `EVERY_5_MIN` is **testing-only** (cycles the whole invoice→payment→renewal loop in minutes, e.g. on sandbox) — never offer it for a real plan. |
 | `components` | yes | ≥1 component (table above). |
 | `currencyCode` | no | ISO 4217, default USD. |
 | `isActive` | no | Sellable or not (default active). |

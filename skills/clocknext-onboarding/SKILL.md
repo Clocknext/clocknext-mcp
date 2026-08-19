@@ -132,10 +132,11 @@ step. Ask fresh, briefly, per step.
     client-side, never committed.
 11. **Re-derive state on re-entry; be idempotent.** This flow spans many turns. On resume,
     read current state from the tools (`list_models`, `list_credits`, …) instead of assuming.
-    If an entitlement already exists (even inactive/parked), **reactivate it** —
-    `update_credit`/`_unit`/`_outcome` with `isActive:true` (a full rewrite; send the current
-    values + the flag). Do NOT loop reactivate-vs-create, and NEVER create a second
-    entitlement on an agentKey that's already taken — agentKeys are unique org-wide.
+    If an entitlement already exists (even inactive/parked), **reactivate it** with
+    `clocknext_unarchive_credit`/`_unit`/`_outcome`/`_plan` — NOT via an update: the backend
+    ignores `isActive` on a full edit, so an update "reactivation" silently does nothing.
+    Do NOT loop reactivate-vs-create, and NEVER create a second entitlement on an agentKey
+    that's already taken — agentKeys are unique org-wide.
 12. **Ask like a human, not a schema.** Every question must read as plain language a
     finance/ops person understands with zero knowledge of ClockNext's internals — never make a
     raw field the question. Don't ask *"which agentKey does this map to?"* or *"ADVANCE or
@@ -191,23 +192,29 @@ For each chosen entitlement, offer the choice and say why you'd lean a given way
   price) / `create_unit`. Clean for simple/flat cases; note it stores the computed price only.
 - Confirm each, then ask "another?" **Loop until satisfied.**
 
-> **Wallet** isn't one of the three — it's a plan component: prepaid USD debited at raw model
-> cost. Say it plainly: **wallet carries no margin — no profit on wallet spend.** Unit-FLAT
-> (per event) ≠ plan-FLAT (one-off). A wallet can also *fund metered usage* — see the
-> wallet-funded-arrear option in step 3 (`walletFundedArrear`). Deep: `references/wallet.md`.
+> **Wallet** isn't one of the three — it's a plan component: prepaid USD. Two debit rules,
+> say them plainly: **plain wallet signals debit at raw model cost (no margin — no profit
+> on wallet-metered spend), but wallet-funded metered usage (step 3's `walletFundedArrear`)
+> debits at the customer price — margin included, profit preserved.** Unit-FLAT (per event)
+> ≠ plan-FLAT (one-off). Deep: `references/wallet.md`.
 
 ### 3 — Plan  *(why: the plan is what a customer actually subscribes to — it bundles the entitlements and sets what they pay)*
-A plan bundles entitlements (+ optional WALLET / FLAT components) and sets the price. Offer
-the choice — **Manually** at `{base}/plans` (the plan builder, recommended for anything
-non-trivial) or **Automatically via MCP** (`create_plan`). Ask for **every** detail in plain
-words: billing cycle, currency, and for each component whether it's billed up-front for the
-cycle or metered as used (ADVANCE vs ARREAR — but ask it in words, rule 12) and any quantity.
+**If step 0 found a plan that already fits, reconcile first (rule 11):** offer to reuse it
+as-is or adjust it with `update_plan` (a full rewrite — `get_plan` first, re-send every
+component you're keeping or it's dropped) before proposing anything new.
+Otherwise a plan bundles entitlements (+ optional WALLET / FLAT components) and sets the
+price. Offer the choice — **Manually** at `{base}/plans` (the plan builder, recommended for
+anything non-trivial) or **Automatically via MCP** (`create_plan`). Ask for **every** detail
+in plain words — **one detail per question, one turn each (cadence): cycle, then currency,
+then each component's mode/quantity** — for each component, billed up-front for the cycle or
+metered as used (ADVANCE vs ARREAR — but ask it in words, rule 12).
 If the plan has both a prepaid wallet AND metered usage, offer **wallet-funded metering** in
 plain words — *"pay that metered usage straight out of the prepaid wallet as it's used (one
 bill a cycle; the wallet can dip negative and the next top-up covers it), instead of a separate
 end-of-cycle usage invoice?"* — and if they say yes, set `walletFundedArrear:true`. It only
 works when the plan has a metered (ARREAR) credit/outcome/unit AND an up-front (ADVANCE) wallet
-(the backend rejects it otherwise), and remember wallet spend still carries no margin.
+(the backend rejects it otherwise). Margin is preserved: wallet-funded usage debits the wallet
+at the customer price (margin included) — only plain wallet signals debit at raw cost.
 Confirm the composition, then create it **active** (rule 5) — unless they asked to review.
 
 Details (components, ADVANCE vs ARREAR, cost composition, `priceAdjustment`): `references/plans.md`.
@@ -219,11 +226,16 @@ org that raises a real $X invoice (auto-payment off, so no card is charged, and 
 it). Proceed?"* ⏸ *wait.* Only after an explicit yes:
 
 **Path 1 — Quick test with a dummy customer:**
-1. Ask **how** — as its own next question: Manually at `{base}/customers`, or Automatically
-   via `clocknext_create_customer` (an obvious throwaway)? ⏸ Then create it → confirm →
-   subscribe it to the plan (`clocknext_create_purchase`). **This purchase is the
-   invoice-raising step** — it must be the one Gate 1 explicitly approved. Say so as you
-   do it.
+1. **`clocknext_list_customers` first** (rule 11) — a leftover test customer gets reused,
+   not duplicated. If creating: ask **how** as its own question — Manually at
+   `{base}/customers`, or Automatically via `clocknext_create_customer` (an obvious
+   throwaway)? ⏸ Create it and report. **Next turn**, announce and execute the
+   subscription (`clocknext_create_purchase`) — **this purchase is the invoice-raising
+   step Gate 1 approved; say so as you do it.** Leave `autoPayment` unset/false for a
+   test, and consider `voidAfterMinutes` so an unpaid test invoice auto-voids. ⚠️ If the
+   customer already has an active/scheduled purchase, a new one **auto-cancels it on
+   activation** (old invoices voided, balances reset — that's how "change plan" works);
+   if so, that fact belongs IN the Gate 1 question.
 2. **Surf the codebase; meter every billable call** (why: any call you miss is un-billed). For
    **each** call, show the real entitlements **by name** (`list_credits`/`_outcomes`/`_units`)
    and **ask the user which one this call should charge against** — never infer (rules 2 & 12).
@@ -246,11 +258,16 @@ it). Proceed?"* ⏸ *wait.* Only after an explicit yes:
    `clocknext_get_customer_usage` / `clocknext_get_customer_balances` to confirm it landed and
    the balance moved. (Unit events aren't metered or read via the MCP — confirm units through
    their **balance** on `clocknext_get_customer_balances`, or in the dashboard.)
-5. Offer to void the test invoice / delete the dummy customer when done.
+5. Offer cleanup when done — but say plainly it happens **in the dashboard, not via the
+   MCP** (there is NO MCP tool to void an invoice or delete a customer — never improvise
+   one): send them to `{base}/customers` to void the test invoice / remove the dummy, and
+   wait if they want it done before continuing.
 6. Then ask: **"Wire real customer onboarding now?"**
 
 **Path 2 — Real onboarding:** add a `clocknextCustomerId` column to the tenant/user table;
-create a ClockNext customer on signup; backfill; then the same metering + testing.
+create a ClockNext customer on signup; backfill existing tenants with
+`clocknext_bulk_import_customers` (≤200/batch, matches back by email, per-row results);
+then the same metering + testing.
 
 How-to: `references/code-metering.md` and `references/testing.md`.
 

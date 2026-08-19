@@ -14,6 +14,7 @@ export function registerWhoami(server: McpServer, cnk: ClockNext): void {
         "- Call FIRST to confirm you are pointed at the intended workspace before recording any real usage.",
       ].join("\n"),
       inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async () => {
       try {

@@ -30,6 +30,7 @@ export function registerGetDoc(server: McpServer): void {
             "The `url` (or path) of a ClockNext docs page — typically taken from a clocknext_search_docs result, e.g. 'https://help.clocknext.com/docs/sdk/signals' or '/docs/api-reference/quickstart'.",
           ),
       },
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ path }) => {
       try {

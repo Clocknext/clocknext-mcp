@@ -42,7 +42,7 @@ agentKey rule below). One line each:
 const KEYS = { chat: "pro_credit", review: "review.analyse", seat: "seats" } as const;
 
 export const meterChat  = (customerId, model, t) => clocknext()?.signals.credit({ customerId, model, agentKey: KEYS.chat, tokens: t });
-export const meterStep  = (customerId, model, t) => clocknext()?.signals.outcome({ customerId, model, agentKey: KEYS.review, tokens: t }); // outcome = the STEP key
+export const meterStep  = (customerId, model, t, runId, complete = false) => clocknext()?.signals.outcome({ customerId, model, agentKey: KEYS.review, tokens: t, runId, complete }); // outcome = the STEP key; runId groups one run; complete:true on the LAST step bills it
 export const meterWallet= (customerId, model, t) => clocknext()?.signals.wallet({ customerId, model, tokens: t });                        // USD at cost, no margin
 export const meterSeat  = (customerId)           => clocknext()?.signals.unit({ customerId, agentKey: KEYS.seat });                       // one event, no tokens
 ```
@@ -76,7 +76,8 @@ entitlement. The mapping is the user's decision, never yours:
 1. Pull the real keys: `clocknext_list_credits`, `clocknext_list_outcomes` (each **step** has
    its own key), `clocknext_list_units`.
 2. For **every** call site you're about to meter, show the candidate entitlements **by name**
-   and **ask, in plain words, which one this call should charge against** (rule 12) — the
+   and **ask, in plain words, which one this call should charge against** (rule 12) — **one
+   call site per question, one turn each (cadence)**, never a batched mapping table. The
    `agentKey` is what you wire internally, not what you ask the user for.
 3. **Never invent, guess, or reuse a key without an explicit pick.** A wrong key silently
    meters against the wrong entitlement and corrupts billing.

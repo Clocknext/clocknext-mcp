@@ -92,6 +92,16 @@ export function registerWriteEnv(server: McpServer): void {
           return errorResult(`Directory does not exist: ${dirname(fileAbs)}`);
         }
 
+        // A symlink named .env would pass the name/git guards while the write
+        // lands on its target — the exact leak the guards exist to prevent.
+        const lst = await fs.lstat(fileAbs).catch(() => null);
+        if (lst?.isSymbolicLink()) {
+          return errorResult(`Refusing to write the key: ${fileAbs} is a symlink — write to a regular file.`);
+        }
+        if (lst && !lst.isFile()) {
+          return errorResult(`Refusing to write the key: ${fileAbs} is not a regular file.`);
+        }
+
         const refusal = gitGuard(fileAbs);
         if (refusal) return errorResult(`Refusing to write the key: ${refusal}`);
 
@@ -104,7 +114,10 @@ export function registerWriteEnv(server: McpServer): void {
           await fs.writeFile(fileAbs, `${line}\n`, { encoding: "utf8", mode: 0o600 });
           action = "created";
         } else if (KEY_LINE_RE.test(existing)) {
-          await fs.writeFile(fileAbs, existing.replace(KEY_LINE_RE, line), "utf8");
+          // Replacer fn (not a string) so `$` sequences in a key can't mangle
+          // the output; global flag so a stale duplicate line can't win.
+          const globalRe = new RegExp(KEY_LINE_RE.source, "gm");
+          await fs.writeFile(fileAbs, existing.replace(globalRe, () => line), "utf8");
           action = "replaced";
         } else {
           const sep = existing.endsWith("\n") || existing === "" ? "" : "\n";

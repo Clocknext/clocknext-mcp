@@ -23,7 +23,7 @@ import { registerWriteEnv } from "./tools/write-env";
 async function main(): Promise<void> {
   const cnk = makeClient(); // throws with a clear message if the key is missing
 
-  const server = new McpServer({ name: "clocknext", version: "0.7.3" });
+  const server = new McpServer({ name: "clocknext", version: "0.7.4" });
 
   registerWhoami(server, cnk);
   registerListModels(server, cnk);

@@ -21364,7 +21364,7 @@ function computeBackoff(attempt, opts, retryAfterMs, rand = Math.random) {
 function sleep(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
 }
-var SDK_VERSION = "0.6.0";
+var SDK_VERSION = "0.7.0";
 var Transport = class {
   constructor(cfg) {
     this.cfg = cfg;
@@ -21985,6 +21985,13 @@ function signalToWire(signal) {
   if (signal.type === "credit" || signal.type === "outcome") {
     body.agentKey = signal.agentKey;
   }
+  if (signal.type === "outcome") {
+    body.runId = signal.runId;
+    if (signal.complete != null) body.complete = signal.complete;
+  }
+  if (signal.type !== "wallet" && signal.metric) {
+    body[signal.metric.ref] = signal.metric.value;
+  }
   if (signal.idempotencyKey) body.idempotencyKey = signal.idempotencyKey;
   return body;
 }
@@ -22283,7 +22290,7 @@ function errorResult(message) {
 }
 function errMsg(err) {
   if (err instanceof ClockNextError) {
-    return `ClockNext API error${err.status ? ` (${err.status})` : ""}: ${err.message}`;
+    return `ClockNext ${err.constructor.name}${err.status ? ` (${err.status})` : ""}: ${err.message}`;
   }
   return err instanceof Error ? err.message : String(err);
 }
@@ -22299,7 +22306,7 @@ function registerAddModel(server, cnk) {
         "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. Autopriced from ClockNext's catalog \u2014 you never set prices here.",
         "",
         "Rules:",
-        "- Only models in ClockNext's pricing catalog can be added \u2014 check clocknext_list_models first.",
+        "- Only models in ClockNext's pricing catalog can be added. clocknext_list_models shows what is ALREADY enabled (check it to avoid re-adding); the addable catalog itself is browsable on the Models page. If the add fails, the model or provider isn't in the catalog.",
         "- If the catalog has no price for it, the model is enabled but meters at $0; the tool returns a Models-page link and a `warning` so you can set pricing."
       ].join("\n"),
       inputSchema: {
@@ -22334,10 +22341,10 @@ function registerAddModel(server, cnk) {
         if (!res.ok) {
           const reason = json.statusDetail?.message || json.error || json.message || `HTTP ${res.status}`;
           return errorResult(
-            `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. See the available models with clocknext_list_models, or manage models on the Models page: ${modelsPage}`
+            `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. Browse the addable catalog on the Models page (${modelsPage}); clocknext_list_models only shows what's already enabled.`
           );
         }
-        const added = await cnk.workspace.models({}).then((list) => list.find((m) => m.modelId === model)).catch(() => void 0);
+        const added = await cnk.workspace.models({}).then((list) => list.find((m) => m.modelId.toLowerCase() === model.toLowerCase())).catch(() => void 0);
         const unpriced = added != null && added.inputPrice === 0 && added.outputPrice === 0 && added.cachePrice === 0;
         if (unpriced) {
           return jsonResult({
@@ -22423,7 +22430,7 @@ var planComponent = external_exports.object({
     "ADVANCE bills up-front for the cycle (needs amount/quantity); ARREAR meters and bills what was consumed."
   ),
   amount: external_exports.number().optional().describe(
-    "WALLET or FLAT only, and REQUIRED for them (USD). WALLET = prepaid balance (debited at raw model cost \u2014 NO margin); FLAT = one-off fee."
+    "WALLET or FLAT only, and REQUIRED for them (USD). WALLET = prepaid balance (plain wallet signals debit it at raw model cost \u2014 no margin; wallet-funded ARREAR usage debits it at customer price, margin included); FLAT = one-off fee."
   ),
   creditId: external_exports.string().optional().describe("CREDIT only: id of an existing credit (clocknext_list_credits)."),
   outcomeId: external_exports.string().optional().describe("OUTCOME only: id of an existing outcome (clocknext_list_outcomes)."),
@@ -22439,12 +22446,14 @@ var unitTier = external_exports.object({
 var planInput = {
   name: external_exports.string().describe("Plan name."),
   description: external_exports.string().nullish().describe("Optional description."),
-  billingCycle: external_exports.enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "YEARLY", "EVERY_5_MIN", "FREE"]).describe("Billing cadence."),
+  billingCycle: external_exports.enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "YEARLY", "EVERY_5_MIN", "FREE"]).describe(
+    "Billing cadence. EVERY_5_MIN is a TESTING-ONLY fast cadence (exercises the full invoice\u2192payment\u2192next-cycle loop in minutes, e.g. on sandbox) \u2014 never offer it for a real plan."
+  ),
   carryForward: external_exports.boolean().optional().describe(
     "DEPRECATED \u2014 still accepted for back-compat but no longer read by the backend; setting it has no effect (carry-forward is fixed policy now: wallet money carries, allowances reset)."
   ),
   walletFundedArrear: external_exports.boolean().optional().describe(
-    "Wallet-funded metering. Default false. When true, every metered (ARREAR) CREDIT/OUTCOME/UNIT component is paid FROM the customer's prepaid WALLET as usage happens \u2014 one invoice per cycle \u2014 instead of a separate arrear invoice at cycle end. The wallet may go negative mid-cycle; the next cycle's wallet top-up absorbs the overdraft. Backend rejects (422) unless ALL THREE hold: (1) the plan has at least one ARREAR credit/outcome/unit component; (2) the plan has a WALLET component; (3) that WALLET component is billingMode ADVANCE (a metered/ARREAR wallet is refused as double-billing). Wallet still debits at raw model cost (NO margin), so usage funded this way earns no margin \u2014 use it for prepaid cost pass-through, not margin-bearing metering."
+    "Wallet-funded metering. Default false. When true, every metered (ARREAR) CREDIT/OUTCOME/UNIT component is paid FROM the customer's prepaid WALLET as usage happens \u2014 one invoice per cycle \u2014 instead of a separate arrear invoice at cycle end. The wallet may go negative mid-cycle; the next cycle's wallet top-up absorbs the overdraft. Backend rejects (422) unless ALL THREE hold: (1) the plan has at least one ARREAR credit/outcome/unit component; (2) the plan has a WALLET component; (3) that WALLET component is billingMode ADVANCE (a metered/ARREAR wallet is refused as double-billing). Margin is PRESERVED: wallet-funded ARREAR usage debits the wallet at the CUSTOMER price (margin included) \u2014 only plain type:'wallet' signals debit at raw model cost with no margin."
   ),
   priceAdjustment: external_exports.number().optional().describe(
     "Signed rounding nudge (USD) on the plan's computed due-at-purchase price \u2014 negative discounts, positive adds (e.g. -0.01 to land on a round number). Default 0; coerced to 0 for FREE / all-ARREAR plans that have no advance total to round. Leave unset unless you need to tidy a rounding edge."
@@ -22464,7 +22473,9 @@ var creditInput = {
     "Model mixer that GROUNDS the price \u2014 one or more enabled catalog models with avg tokens + input/output/cache split. The tool reads live prices and computes the base cost; never type a raw price."
   ),
   marginPercent: external_exports.number().min(0).describe("Markup over the computed base cost, as a percent (100 = double the base = pricePerCredit)."),
-  tokensPerCredit: external_exports.number().min(0).optional().describe("How many tokens equal one credit. Default 0. Governs how usage draws the credit down."),
+  tokensPerCredit: external_exports.number().min(0).optional().describe(
+    "Display-only metadata: the token volume of the pricing bundle shown in the dashboard. Does NOT affect draw-down \u2014 credits consumed per signal = provider cost / basePrice. Default 0."
+  ),
   description: external_exports.string().optional().describe("Optional human-readable description.")
 };
 var outcomeStep = external_exports.object({
@@ -22490,7 +22501,7 @@ var unitInput = {
   ),
   pricingType: external_exports.enum(["FLAT", "SLAB", "VOLUME"]).describe("FLAT = a single per-event price. SLAB/VOLUME = tiered pricing."),
   flatPrice: external_exports.number().min(0).optional().describe("FLAT only: price per event. Default 0."),
-  tiers: external_exports.array(unitTier).max(50).optional().describe("SLAB/VOLUME only: 1\u201350 tiers, ordered; only the last may have upTo:null."),
+  tiers: external_exports.array(unitTier).min(1).max(50).optional().describe("SLAB/VOLUME only: 1\u201350 tiers, ordered; only the last may have upTo:null."),
   description: external_exports.string().nullish().describe("Optional human-readable description."),
   isActive: external_exports.boolean().optional().describe("Whether the unit is active/sellable.")
 };
@@ -22606,6 +22617,34 @@ function registerCrud(server, opts) {
       }
     }
   );
+  server.registerTool(
+    `clocknext_unarchive_${resource}`,
+    {
+      title: `ClockNext: unarchive ${resource}`,
+      description: [
+        `Reactivate an archived ${resource} (sets isActive\u2192true) \u2014 the reverse of clocknext_archive_${resource}. Same identity, same definition; nothing is re-priced or rewritten.`,
+        "",
+        "Rules:",
+        `- This is the ONLY way to reactivate via the MCP \u2014 clocknext_update_${resource} cannot flip active state (the backend's full edit ignores isActive).`,
+        `- Prefer this over creating a replacement: agentKeys/identities are unique org-wide, so a parked ${resource} must be revived, never duplicated.`
+      ].join("\n"),
+      inputSchema: { id: external_exports.string().describe(`The ${resource} id to reactivate.`) },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true
+      }
+    },
+    async ({ id }) => {
+      try {
+        const res = await api.setActive(id, true);
+        return jsonResult(res ?? { ok: true, unarchived: id });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
 }
 function registerCatalogueTools(server, cnk) {
   registerCrud(server, {
@@ -22645,7 +22684,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- History is kept and customers already on it are unaffected; it just becomes unsellable and drops out of active lists.",
-        "- Reversible: reactivate via clocknext_update_plan with isActive:true (a full rewrite) \u2014 there is no separate un-archive tool.",
+        "- Reversible: reactivate with clocknext_unarchive_plan (update_plan canNOT flip active state \u2014 the backend ignores isActive on a full edit).",
         "- Unrelated to cancelling a customer's purchase or ending a subscription."
       ].join("\n")
     }
@@ -22666,6 +22705,11 @@ function registerCatalogueTools(server, cnk) {
       const a = args;
       const priced = await computeMixerBase(cnk, a.models);
       if (!priced.ok) return { error: priced.error };
+      if (priced.basePrice <= 0) {
+        return {
+          error: "Credit priced to $0 \u2014 the mixer's model(s) have no catalog price, so usage would meter at zero revenue. Set their pricing on the Models page first, then retry."
+        };
+      }
       return {
         name: a.name,
         agentKey: a.agentKey,
@@ -22693,7 +22737,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Full rewrite, not a patch \u2014 omitted fields are cleared. Read it first with clocknext_get_credit.",
-        "- Pricing is re-grounded from the `models` mixer you pass (same as create). To only flip active state, resend the current values plus isActive.",
+        "- Pricing is re-grounded from the `models` mixer you pass (same as create). To flip active state use clocknext_archive_credit / clocknext_unarchive_credit \u2014 isActive is ignored here.",
         "- Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately."
       ].join("\n"),
       archive: [
@@ -22701,7 +22745,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it); it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate via clocknext_update_credit with isActive:true (a full rewrite).",
+        "- Reversible: reactivate with clocknext_unarchive_credit (update_credit canNOT flip active state \u2014 the backend ignores isActive on a full edit).",
         "- Unrelated to archiving a customer, ending a purchase, or clearing a balance."
       ].join("\n")
     }
@@ -22768,7 +22812,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Steps and any in-flight/completed history are kept; existing plans and in-progress outcomes are unaffected; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate via clocknext_update_outcome with isActive:true (a full rewrite).",
+        "- Reversible: reactivate with clocknext_unarchive_outcome (update_outcome canNOT flip active state \u2014 the backend ignores isActive on a full edit).",
         "- Unrelated to archiving a customer or ending a purchase."
       ].join("\n")
     }
@@ -22808,7 +22852,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Recorded usage is kept and existing plans metering it keep working; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate via clocknext_update_unit with isActive:true (a full rewrite).",
+        "- Reversible: reactivate with clocknext_unarchive_unit (update_unit canNOT flip active state \u2014 the backend ignores isActive on a full edit).",
         "- Unrelated to archiving a customer or ending a purchase."
       ].join("\n")
     }
@@ -22821,17 +22865,17 @@ var customerFields = {
   email: external_exports.string().min(1).describe("Primary email \u2014 required, and the key bulk import matches back on."),
   description: external_exports.string().nullish().describe("Optional freeform description of the customer."),
   website: external_exports.string().nullish().describe("The customer's website."),
-  phone: external_exports.string().nullish(),
-  legalName: external_exports.string().nullish(),
-  addressLine1: external_exports.string().nullish(),
-  addressLine2: external_exports.string().nullish(),
-  city: external_exports.string().nullish(),
-  state: external_exports.string().nullish(),
-  country: external_exports.string().nullish(),
-  pincode: external_exports.string().nullish(),
-  taxId: external_exports.string().nullish(),
+  phone: external_exports.string().nullish().describe("Contact phone number."),
+  legalName: external_exports.string().nullish().describe("Registered legal name (for invoices), when it differs from `name`."),
+  addressLine1: external_exports.string().nullish().describe("Billing address, line 1."),
+  addressLine2: external_exports.string().nullish().describe("Billing address, line 2."),
+  city: external_exports.string().nullish().describe("Billing address city."),
+  state: external_exports.string().nullish().describe("Billing address state / province / region."),
+  country: external_exports.string().nullish().describe("Billing address country."),
+  pincode: external_exports.string().nullish().describe("Postal / ZIP / PIN code."),
+  taxId: external_exports.string().nullish().describe("Tax identifier shown on invoices (VAT / GST / EIN\u2026)."),
   notes: external_exports.string().nullish().describe("Internal notes about the customer."),
-  logoUrl: external_exports.string().nullish(),
+  logoUrl: external_exports.string().nullish().describe("URL of the customer's logo image."),
   currencyCode: external_exports.string().optional().describe("ISO 4217 (3 letters); must be enabled for the org. Defaults to the org currency.")
 };
 var customerObject = external_exports.object(customerFields);
@@ -22954,6 +22998,7 @@ function registerCustomerTools(server, cnk) {
         "",
         "Rules:",
         "- \u26D4 Raises a REAL invoice (real money on a live org). Only call this after the user explicitly approved this purchase in a question dedicated to it alone \u2014 never bundled with another question, never inferred from an earlier yes.",
+        "- \u26D4 If the customer already has a scheduled/active purchase, the new one AUTO-CANCELS it when it activates (old status\u2192CANCELLED, its open invoices voided, credit balances reset \u2014 this is how 'change plan' works). Check clocknext_get_customer_plan first and SAY SO in the approval question.",
         "- Do this after clocknext_create_customer + clocknext_create_plan.",
         "- A usage signal only prices if the customer has an active plan whose components match the meter (credit / outcome / unit)."
       ].join("\n"),
@@ -23013,7 +23058,7 @@ function registerCustomerTools(server, cnk) {
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           return errorResult(
-            json.statusDetail?.message || `HTTP ${res.status} on bulk import.`
+            json.statusDetail?.message || json.error || json.message || `HTTP ${res.status} on bulk import.`
           );
         }
         return jsonResult(json.result ?? json);
@@ -23073,7 +23118,8 @@ function registerGetDoc(server) {
         path: external_exports.string().min(1).describe(
           "The `url` (or path) of a ClockNext docs page \u2014 typically taken from a clocknext_search_docs result, e.g. 'https://help.clocknext.com/docs/sdk/signals' or '/docs/api-reference/quickstart'."
         )
-      }
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
     },
     async ({ path }) => {
       try {
@@ -23100,7 +23146,8 @@ function registerListModels(server, cnk) {
       description: "List the models the organisation has enabled, with their USD prices per 1,000,000 tokens. Use a returned `modelId` as the `model` when verifying or recording usage. Pass active=true to see only models that can be metered right now.",
       inputSchema: {
         active: external_exports.boolean().optional().describe("Only return currently-active (meterable) models.")
-      }
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
     },
     async ({ active }) => {
       try {
@@ -23118,7 +23165,7 @@ function registerListModels(server, cnk) {
 // src/tools/signal.ts
 var signalShape = {
   type: external_exports.enum(["wallet", "credit", "outcome"]).describe(
-    "Which meter to record against: 'wallet' debits USD at the model's cost; 'credit' draws down a named credit; 'outcome' advances one step of a workflow."
+    "Which meter to record against: 'wallet' debits USD at the model's cost; 'credit' draws down a named credit; 'outcome' advances one step of a run (set complete:true on the last step to bill it)."
   ),
   customerId: external_exports.string().min(1).describe("The ClockNext customer id (e.g. cus_\u2026) this usage belongs to."),
   model: external_exports.string().min(1).describe(
@@ -23130,7 +23177,13 @@ var signalShape = {
   agentKey: external_exports.string().optional().describe(
     "Required for type 'credit' (the credit's agent key) or 'outcome' (the outcome step's agent key). Ignored for 'wallet'."
   ),
-  member: external_exports.string().optional().describe("Optional customer-member email to attribute the usage to.")
+  member: external_exports.string().optional().describe("Optional customer-member email to attribute the usage to."),
+  runId: external_exports.string().optional().describe(
+    "REQUIRED for type 'outcome' (ignored otherwise): your stable id for ONE deliverable run, unique per organisation. Every step signal of the same run sends the same runId."
+  ),
+  complete: external_exports.boolean().optional().describe(
+    "Outcome only: set true on the LAST step's signal to declare the run finished \u2014 that is what bills the outcome (completion is declared by you, never inferred from step counts). Replaying a completed run bills nothing."
+  )
 };
 function buildSignal(a) {
   const tokens = {
@@ -23148,6 +23201,18 @@ function buildSignal(a) {
   if (a.type === "wallet") return { type: "wallet", ...common };
   if (!a.agentKey) {
     return { error: `agentKey is required for a '${a.type}' signal.` };
+  }
+  if (a.type === "outcome") {
+    if (!a.runId) {
+      return { error: "runId is required for an 'outcome' signal \u2014 it groups the step signals of one deliverable run." };
+    }
+    return {
+      type: "outcome",
+      ...common,
+      agentKey: a.agentKey,
+      runId: a.runId,
+      ...a.complete != null ? { complete: a.complete } : {}
+    };
   }
   return { type: a.type, ...common, agentKey: a.agentKey };
 }
@@ -23209,7 +23274,8 @@ function registerSearchDocs(server) {
           "Restrict results. concept: domain / how it works \u2014 start here for unfamiliar terms. api: REST reference, any language. javascript: JS/TS SDK reference \u2014 use ONLY after confirming the target codebase is JS/TS; NEVER for Python/Go/Ruby/PHP/Rust/Java/C#. Omit to search all docs."
         ),
         limit: external_exports.number().int().min(1).max(20).optional().describe("Maximum number of pages to return (default 8).")
-      }
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
     },
     async ({ query, kind, limit }) => {
       try {
@@ -23243,8 +23309,9 @@ function registerVerifySignal(server, cnk) {
     "clocknext_verify_signal",
     {
       title: "ClockNext: verify signal (dry run)",
-      description: "Validate and PRICE a usage signal WITHOUT recording it \u2014 a dry run. Returns the projected usage log (cost, credits drawn, applied rules) so you can confirm the customer, model, and plan are wired up correctly before sending real traffic. Records nothing and never bills.",
-      inputSchema: signalShape
+      description: "Validate and PRICE a usage signal WITHOUT recording it \u2014 a dry run. Returns the projected usage log (cost, credits drawn, applied rules; may be null when the server computes no log) so you can confirm the customer, model, and plan are wired up correctly before sending real traffic. Records nothing and never bills.",
+      inputSchema: signalShape,
+      annotations: { readOnlyHint: true, openWorldHint: true }
     },
     async (args) => {
       const signal = buildSignal(args);
@@ -23271,7 +23338,8 @@ function registerWhoami(server, cnk) {
         "Rules:",
         "- Call FIRST to confirm you are pointed at the intended workspace before recording any real usage."
       ].join("\n"),
-      inputSchema: {}
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: true }
     },
     async () => {
       try {
@@ -23340,6 +23408,13 @@ function registerWriteEnv(server) {
         if (!parent?.isDirectory()) {
           return errorResult(`Directory does not exist: ${dirname(fileAbs)}`);
         }
+        const lst = await fs.lstat(fileAbs).catch(() => null);
+        if (lst?.isSymbolicLink()) {
+          return errorResult(`Refusing to write the key: ${fileAbs} is a symlink \u2014 write to a regular file.`);
+        }
+        if (lst && !lst.isFile()) {
+          return errorResult(`Refusing to write the key: ${fileAbs} is not a regular file.`);
+        }
         const refusal = gitGuard(fileAbs);
         if (refusal) return errorResult(`Refusing to write the key: ${refusal}`);
         const existing = await fs.readFile(fileAbs, "utf8").catch(() => null);
@@ -23350,7 +23425,8 @@ function registerWriteEnv(server) {
 `, { encoding: "utf8", mode: 384 });
           action = "created";
         } else if (KEY_LINE_RE.test(existing)) {
-          await fs.writeFile(fileAbs, existing.replace(KEY_LINE_RE, line), "utf8");
+          const globalRe = new RegExp(KEY_LINE_RE.source, "gm");
+          await fs.writeFile(fileAbs, existing.replace(globalRe, () => line), "utf8");
           action = "replaced";
         } else {
           const sep = existing.endsWith("\n") || existing === "" ? "" : "\n";
@@ -23374,7 +23450,7 @@ function registerWriteEnv(server) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.7.3" });
+  const server = new McpServer({ name: "clocknext", version: "0.7.4" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);

@@ -50,6 +50,7 @@ export function registerSearchDocs(server: McpServer): void {
           .optional()
           .describe("Maximum number of pages to return (default 8)."),
       },
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ query, kind, limit }) => {
       try {

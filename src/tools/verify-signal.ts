@@ -9,8 +9,9 @@ export function registerVerifySignal(server: McpServer, cnk: ClockNext): void {
     {
       title: "ClockNext: verify signal (dry run)",
       description:
-        "Validate and PRICE a usage signal WITHOUT recording it — a dry run. Returns the projected usage log (cost, credits drawn, applied rules) so you can confirm the customer, model, and plan are wired up correctly before sending real traffic. Records nothing and never bills.",
+        "Validate and PRICE a usage signal WITHOUT recording it — a dry run. Returns the projected usage log (cost, credits drawn, applied rules; may be null when the server computes no log) so you can confirm the customer, model, and plan are wired up correctly before sending real traffic. Records nothing and never bills.",
       inputSchema: signalShape,
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async (args) => {
       const signal = buildSignal(args);

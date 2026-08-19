@@ -10,7 +10,7 @@ export const signalShape = {
   type: z
     .enum(["wallet", "credit", "outcome"])
     .describe(
-      "Which meter to record against: 'wallet' debits USD at the model's cost; 'credit' draws down a named credit; 'outcome' advances one step of a workflow.",
+      "Which meter to record against: 'wallet' debits USD at the model's cost; 'credit' draws down a named credit; 'outcome' advances one step of a run (set complete:true on the last step to bill it).",
     ),
   customerId: z
     .string()
@@ -40,6 +40,18 @@ export const signalShape = {
     .string()
     .optional()
     .describe("Optional customer-member email to attribute the usage to."),
+  runId: z
+    .string()
+    .optional()
+    .describe(
+      "REQUIRED for type 'outcome' (ignored otherwise): your stable id for ONE deliverable run, unique per organisation. Every step signal of the same run sends the same runId.",
+    ),
+  complete: z
+    .boolean()
+    .optional()
+    .describe(
+      "Outcome only: set true on the LAST step's signal to declare the run finished — that is what bills the outcome (completion is declared by you, never inferred from step counts). Replaying a completed run bills nothing.",
+    ),
 };
 
 /** Args after zod parsing (plus the record-only idempotencyKey). */
@@ -52,6 +64,8 @@ export interface SignalArgs {
   cacheTokens?: number;
   agentKey?: string;
   member?: string;
+  runId?: string;
+  complete?: boolean;
   idempotencyKey?: string;
 }
 
@@ -72,6 +86,18 @@ export function buildSignal(a: SignalArgs): Signal | { error: string } {
   if (a.type === "wallet") return { type: "wallet", ...common };
   if (!a.agentKey) {
     return { error: `agentKey is required for a '${a.type}' signal.` };
+  }
+  if (a.type === "outcome") {
+    if (!a.runId) {
+      return { error: "runId is required for an 'outcome' signal — it groups the step signals of one deliverable run." };
+    }
+    return {
+      type: "outcome",
+      ...common,
+      agentKey: a.agentKey,
+      runId: a.runId,
+      ...(a.complete != null ? { complete: a.complete } : {}),
+    };
   }
   return { type: a.type, ...common, agentKey: a.agentKey };
 }

@@ -1,8 +1,12 @@
 # Proving it works
 
-Always dry-run before real traffic, then read the state back. Do all of this on **sandbox**
-(`clocknext_whoami` confirms sandbox vs live) before promoting to live.
+Always dry-run before real traffic, then read the state back. Prefer **sandbox**
+(`clocknext_whoami` confirms sandbox vs live) — but if the user chose live in step 0,
+run the same sequence there without re-litigating the org choice (SKILL.md rule 6); the
+two money gates are the guardrails.
 
+0. **Confirm the wiring** — `clocknext_get_customer_plan` shows the customer's active plan;
+   check it's the one you expect **before** firing anything.
 1. **Dry run** — `clocknext_verify_signal` with the *exact* signal your code will send. Why
    first: it prices **without recording**, so it confirms the customer, model, plan and
    `agentKey` all line up with **zero risk** of a bad bill. Fix any mismatch here before

@@ -119,7 +119,7 @@ const planComponent = z
       .number()
       .optional()
       .describe(
-        "WALLET or FLAT only, and REQUIRED for them (USD). WALLET = prepaid balance (debited at raw model cost — NO margin); FLAT = one-off fee.",
+        "WALLET or FLAT only, and REQUIRED for them (USD). WALLET = prepaid balance (plain wallet signals debit it at raw model cost — no margin; wallet-funded ARREAR usage debits it at customer price, margin included); FLAT = one-off fee.",
       ),
     creditId: z
       .string()
@@ -157,7 +157,9 @@ const planInput: z.ZodRawShape = {
   description: z.string().nullish().describe("Optional description."),
   billingCycle: z
     .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "YEARLY", "EVERY_5_MIN", "FREE"])
-    .describe("Billing cadence."),
+    .describe(
+      "Billing cadence. EVERY_5_MIN is a TESTING-ONLY fast cadence (exercises the full invoice→payment→next-cycle loop in minutes, e.g. on sandbox) — never offer it for a real plan.",
+    ),
   carryForward: z
     .boolean()
     .optional()
@@ -168,7 +170,7 @@ const planInput: z.ZodRawShape = {
     .boolean()
     .optional()
     .describe(
-      "Wallet-funded metering. Default false. When true, every metered (ARREAR) CREDIT/OUTCOME/UNIT component is paid FROM the customer's prepaid WALLET as usage happens — one invoice per cycle — instead of a separate arrear invoice at cycle end. The wallet may go negative mid-cycle; the next cycle's wallet top-up absorbs the overdraft. Backend rejects (422) unless ALL THREE hold: (1) the plan has at least one ARREAR credit/outcome/unit component; (2) the plan has a WALLET component; (3) that WALLET component is billingMode ADVANCE (a metered/ARREAR wallet is refused as double-billing). Wallet still debits at raw model cost (NO margin), so usage funded this way earns no margin — use it for prepaid cost pass-through, not margin-bearing metering.",
+      "Wallet-funded metering. Default false. When true, every metered (ARREAR) CREDIT/OUTCOME/UNIT component is paid FROM the customer's prepaid WALLET as usage happens — one invoice per cycle — instead of a separate arrear invoice at cycle end. The wallet may go negative mid-cycle; the next cycle's wallet top-up absorbs the overdraft. Backend rejects (422) unless ALL THREE hold: (1) the plan has at least one ARREAR credit/outcome/unit component; (2) the plan has a WALLET component; (3) that WALLET component is billingMode ADVANCE (a metered/ARREAR wallet is refused as double-billing). Margin is PRESERVED: wallet-funded ARREAR usage debits the wallet at the CUSTOMER price (margin included) — only plain type:'wallet' signals debit at raw model cost with no margin.",
     ),
   priceAdjustment: z
     .number()
@@ -208,7 +210,9 @@ const creditInput: z.ZodRawShape = {
     .number()
     .min(0)
     .optional()
-    .describe("How many tokens equal one credit. Default 0. Governs how usage draws the credit down."),
+    .describe(
+      "Display-only metadata: the token volume of the pricing bundle shown in the dashboard. Does NOT affect draw-down — credits consumed per signal = provider cost / basePrice. Default 0.",
+    ),
   description: z.string().optional().describe("Optional human-readable description."),
 };
 
@@ -257,6 +261,7 @@ const unitInput: z.ZodRawShape = {
   flatPrice: z.number().min(0).optional().describe("FLAT only: price per event. Default 0."),
   tiers: z
     .array(unitTier)
+    .min(1)
     .max(50)
     .optional()
     .describe("SLAB/VOLUME only: 1–50 tiers, ordered; only the last may have upTo:null."),
@@ -411,6 +416,37 @@ function registerCrud(
       }
     },
   );
+
+  // The bare active toggle is the ONLY reliable reactivation path: the backend's
+  // full-edit schemas drop isActive, so `update_*` cannot un-archive anything.
+  server.registerTool(
+    `clocknext_unarchive_${resource}`,
+    {
+      title: `ClockNext: unarchive ${resource}`,
+      description: [
+        `Reactivate an archived ${resource} (sets isActive→true) — the reverse of clocknext_archive_${resource}. Same identity, same definition; nothing is re-priced or rewritten.`,
+        "",
+        "Rules:",
+        `- This is the ONLY way to reactivate via the MCP — clocknext_update_${resource} cannot flip active state (the backend's full edit ignores isActive).`,
+        `- Prefer this over creating a replacement: agentKeys/identities are unique org-wide, so a parked ${resource} must be revived, never duplicated.`,
+      ].join("\n"),
+      inputSchema: { id: z.string().describe(`The ${resource} id to reactivate.`) },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ id }) => {
+      try {
+        const res = await api.setActive(id, true);
+        return jsonResult(res ?? { ok: true, unarchived: id });
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    },
+  );
 }
 
 // ---------- wire the four resources ----------
@@ -453,7 +489,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- History is kept and customers already on it are unaffected; it just becomes unsellable and drops out of active lists.",
-        "- Reversible: reactivate via clocknext_update_plan with isActive:true (a full rewrite) — there is no separate un-archive tool.",
+        "- Reversible: reactivate with clocknext_unarchive_plan (update_plan canNOT flip active state — the backend ignores isActive on a full edit).",
         "- Unrelated to cancelling a customer's purchase or ending a subscription.",
       ].join("\n"),
     },
@@ -482,6 +518,12 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
       };
       const priced = await computeMixerBase(cnk, a.models);
       if (!priced.ok) return { error: priced.error };
+      if (priced.basePrice <= 0) {
+        return {
+          error:
+            "Credit priced to $0 — the mixer's model(s) have no catalog price, so usage would meter at zero revenue. Set their pricing on the Models page first, then retry.",
+        };
+      }
       return {
         name: a.name,
         agentKey: a.agentKey,
@@ -509,7 +551,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- Full rewrite, not a patch — omitted fields are cleared. Read it first with clocknext_get_credit.",
-        "- Pricing is re-grounded from the `models` mixer you pass (same as create). To only flip active state, resend the current values plus isActive.",
+        "- Pricing is re-grounded from the `models` mixer you pass (same as create). To flip active state use clocknext_archive_credit / clocknext_unarchive_credit — isActive is ignored here.",
         "- Changing `agentKey` re-points which runtime signals map here — do it deliberately.",
       ].join("\n"),
       archive: [
@@ -517,7 +559,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- Recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it); it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate via clocknext_update_credit with isActive:true (a full rewrite).",
+        "- Reversible: reactivate with clocknext_unarchive_credit (update_credit canNOT flip active state — the backend ignores isActive on a full edit).",
         "- Unrelated to archiving a customer, ending a purchase, or clearing a balance.",
       ].join("\n"),
     },
@@ -591,7 +633,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- Steps and any in-flight/completed history are kept; existing plans and in-progress outcomes are unaffected; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate via clocknext_update_outcome with isActive:true (a full rewrite).",
+        "- Reversible: reactivate with clocknext_unarchive_outcome (update_outcome canNOT flip active state — the backend ignores isActive on a full edit).",
         "- Unrelated to archiving a customer or ending a purchase.",
       ].join("\n"),
     },
@@ -632,7 +674,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- Recorded usage is kept and existing plans metering it keep working; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate via clocknext_update_unit with isActive:true (a full rewrite).",
+        "- Reversible: reactivate with clocknext_unarchive_unit (update_unit canNOT flip active state — the backend ignores isActive on a full edit).",
         "- Unrelated to archiving a customer or ending a purchase.",
       ].join("\n"),
     },

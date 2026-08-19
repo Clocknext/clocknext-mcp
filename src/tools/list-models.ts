@@ -16,6 +16,7 @@ export function registerListModels(server: McpServer, cnk: ClockNext): void {
           .optional()
           .describe("Only return currently-active (meterable) models."),
       },
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ active }) => {
       try {

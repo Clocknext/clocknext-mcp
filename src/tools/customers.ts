@@ -24,17 +24,17 @@ const customerFields = {
     .describe("Primary email — required, and the key bulk import matches back on."),
   description: z.string().nullish().describe("Optional freeform description of the customer."),
   website: z.string().nullish().describe("The customer's website."),
-  phone: z.string().nullish(),
-  legalName: z.string().nullish(),
-  addressLine1: z.string().nullish(),
-  addressLine2: z.string().nullish(),
-  city: z.string().nullish(),
-  state: z.string().nullish(),
-  country: z.string().nullish(),
-  pincode: z.string().nullish(),
-  taxId: z.string().nullish(),
+  phone: z.string().nullish().describe("Contact phone number."),
+  legalName: z.string().nullish().describe("Registered legal name (for invoices), when it differs from `name`."),
+  addressLine1: z.string().nullish().describe("Billing address, line 1."),
+  addressLine2: z.string().nullish().describe("Billing address, line 2."),
+  city: z.string().nullish().describe("Billing address city."),
+  state: z.string().nullish().describe("Billing address state / province / region."),
+  country: z.string().nullish().describe("Billing address country."),
+  pincode: z.string().nullish().describe("Postal / ZIP / PIN code."),
+  taxId: z.string().nullish().describe("Tax identifier shown on invoices (VAT / GST / EIN…)."),
   notes: z.string().nullish().describe("Internal notes about the customer."),
-  logoUrl: z.string().nullish(),
+  logoUrl: z.string().nullish().describe("URL of the customer's logo image."),
   currencyCode: z
     .string()
     .optional()
@@ -178,6 +178,7 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
         "",
         "Rules:",
         "- ⛔ Raises a REAL invoice (real money on a live org). Only call this after the user explicitly approved this purchase in a question dedicated to it alone — never bundled with another question, never inferred from an earlier yes.",
+        "- ⛔ If the customer already has a scheduled/active purchase, the new one AUTO-CANCELS it when it activates (old status→CANCELLED, its open invoices voided, credit balances reset — this is how 'change plan' works). Check clocknext_get_customer_plan first and SAY SO in the approval question.",
         "- Do this after clocknext_create_customer + clocknext_create_plan.",
         "- A usage signal only prices if the customer has an active plan whose components match the meter (credit / outcome / unit).",
       ].join("\n"),
@@ -252,11 +253,16 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
         });
         const json = (await res.json().catch(() => ({}))) as {
           result?: unknown;
+          error?: string;
+          message?: string;
           statusDetail?: { message?: string };
         };
         if (!res.ok) {
           return errorResult(
-            json.statusDetail?.message || `HTTP ${res.status} on bulk import.`,
+            json.statusDetail?.message ||
+              json.error ||
+              json.message ||
+              `HTTP ${res.status} on bulk import.`,
           );
         }
         return jsonResult(json.result ?? json);

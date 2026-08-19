@@ -28,7 +28,7 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
         "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. Autopriced from ClockNext's catalog — you never set prices here.",
         "",
         "Rules:",
-        "- Only models in ClockNext's pricing catalog can be added — check clocknext_list_models first.",
+        "- Only models in ClockNext's pricing catalog can be added. clocknext_list_models shows what is ALREADY enabled (check it to avoid re-adding); the addable catalog itself is browsable on the Models page. If the add fails, the model or provider isn't in the catalog.",
         "- If the catalog has no price for it, the model is enabled but meters at $0; the tool returns a Models-page link and a `warning` so you can set pricing.",
       ].join("\n"),
       inputSchema: {
@@ -79,7 +79,7 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
           const reason =
             json.statusDetail?.message || json.error || json.message || `HTTP ${res.status}`;
           return errorResult(
-            `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. See the available models with clocknext_list_models, or manage models on the Models page: ${modelsPage}`,
+            `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. Browse the addable catalog on the Models page (${modelsPage}); clocknext_list_models only shows what's already enabled.`,
           );
         }
 
@@ -88,7 +88,7 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
         // Read the enabled model back to detect that (best-effort).
         const added = await cnk.workspace
           .models({})
-          .then((list) => list.find((m) => m.modelId === model))
+          .then((list) => list.find((m) => m.modelId.toLowerCase() === model.toLowerCase()))
           .catch(() => undefined);
 
         const unpriced =

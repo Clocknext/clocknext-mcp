@@ -14,7 +14,7 @@ this is a curated summary, not the source of truth.
 | **Credit** | catalogue entitlement | Token-metered balance, drawn down per call by real token cost (+ your margin). | [`credit.md`](credit.md) |
 | **Outcome** | catalogue entitlement | Billed once per *completed* multi-step LLM deliverable. | [`outcome.md`](outcome.md) |
 | **Unit** | catalogue entitlement | Fixed price per *event*, no tokens — FLAT / SLAB / VOLUME pricing. | [`unit.md`](unit.md) |
-| **Wallet** | plan component | Prepaid USD balance, debited at **raw** model cost (no margin). Can also fund metered usage. | [`wallet.md`](wallet.md) |
+| **Wallet** | plan component | Prepaid USD balance. Plain wallet signals debit at **raw** model cost (no margin); when it funds metered usage (`walletFundedArrear`) it debits the **customer price — margin included**. | [`wallet.md`](wallet.md) |
 | **Flat** | plan component | A one-off fee on the plan (e.g. setup). | [`plans.md`](plans.md) |
 | **Plan** | the wrapper | Bundles the above into what a customer subscribes to and pays for. | [`plans.md`](plans.md) |
 
@@ -48,4 +48,6 @@ plan. Loop until the user says the catalogue is complete.
 ## Pricing is always model-grounded
 Credit and outcome prices are **computed from a model mixer**, never hand-typed — see
 [`pricing-and-models.md`](pricing-and-models.md) for the formula and the enable-a-model step.
-Unit prices are set directly (they're not token-based). Wallet carries no price at all (raw cost).
+Unit prices are set directly (they're not token-based). Wallet carries no price of its own —
+plain wallet spend is raw cost; wallet-funded metered usage debits at the funded entitlement's
+customer price.

@@ -47,6 +47,9 @@ signals.outcome({ customerId, model, agentKey: "<step key>", tokens, runId, comp
 - Signals with `complete: false` are **attached to the run but cost nothing**.
 - The signal carrying **`complete: true` closes the run and bills exactly `pricePerOutcome` once.**
 - A duplicate `complete: true` is **idempotent** — no second charge.
+- The MCP test tools take the same fields: `clocknext_verify_signal` / `clocknext_record_usage`
+  with `type:"outcome"` require `runId` and accept `complete` — use them to prove a run
+  end-to-end before wiring the product.
 
 So partial / abandoned runs are free; you're paid only for finished outcomes.
 
