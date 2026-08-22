@@ -38,6 +38,7 @@ tool prompts, never decisions. Every turn has exactly this shape:
 3. **Do only that step.**
 4. **Report** what you found or did, then **ask exactly ONE question** — and STOP. Do
    not start the next step in the same turn.
+5. **Don't use any tools related to ask questions** - Just write the stuffs in the chat and STOP. Don't use any question asking tool, By limiting them with few baked options.
 
 Hard rules:
 - **One question per dialog.** NEVER put two questions in one AskUserQuestion call, and
