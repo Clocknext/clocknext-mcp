@@ -60,9 +60,11 @@ A unit event is recorded **in the customer's product**, one call = one unit:
 signals.unit({ customerId, agentKey })          // SDK — no tokens, no model
 // or POST /api/v1/units  { customerId, agentKey }   (REST)
 ```
-The MCP builds the unit catalogue and reads balances; it does **not** record unit events, and it
-has **no unit-event read tool** — confirm consumption via a customer's unit **balance**
-(`clocknext_get_customer_balances`). See [`code-metering.md`](code-metering.md).
+The MCP builds the unit catalogue and does **not** record unit events. `signals.unit()` sends
+immediately and returns a Promise; handle failures at the product's server boundary. The MCP
+has no unit-event read tool, and an ARREAR Unit may have no balance decrement. Confirm
+consumption through the product SDK/API's supported Unit usage/event-count endpoint, not a
+balance alone. See [`code-metering.md`](code-metering.md).
 
 ## In a plan
 Granted via a **UNIT component** referencing the unit id:

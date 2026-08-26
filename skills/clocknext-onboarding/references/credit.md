@@ -18,7 +18,7 @@ Fields (see also the mixer in [`pricing-and-models.md`](pricing-and-models.md)):
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `name` | yes | Human label. |
-| `agentKey` | yes | **Durable identity** — the lowercased stable key `[a-z0-9._-]` your product sends when recording usage. A rename never changes it; unique per credit. |
+| `agentKey` | yes | **Durable identity** — the lowercased stable key `[a-z0-9._-]` your product sends when recording usage. A rename never changes it; it must be unique across the organization. |
 | `models` | yes | The **model mixer**: 1+ enabled models, each with `avgTokens` and an `inputPct`/`outputPct`/`cachePct` split that totals 100. Grounds the price. |
 | `marginPercent` | yes | Markup over the computed base cost. `100` = double the base = price per credit. `0` = at cost. |
 | `tokensPerCredit` | no | How many tokens map to one credit (default 0). A display/allowance convenience; the actual money draw-down is cost-based (below). |

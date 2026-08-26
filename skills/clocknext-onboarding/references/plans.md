@@ -3,7 +3,8 @@
 A **plan** bundles the building blocks into what a customer actually buys and pays. It's a list
 of **components** plus a billing cycle and currency. A purchase (subscription) raises a real
 invoice, so plans are the last thing you build before the real-money gates (Gate 1 = the
-purchase, Gate 2 = the first real signal — [SKILL.md](../SKILL.md) rule 3, each asked alone).
+purchase, Gate 2 = the first real signal — [SKILL.md](../SKILL.md) S17 and S28, each asked
+alone).
 
 ## Components
 Each component is one of five types, in one of two billing modes.
@@ -76,7 +77,7 @@ The ARREAR credit is then billed as consumed — separately at cycle end, or fro
   enforced by the backend with a **clean 422** — the tool surfaces the message; fix and resend.
 - Changes apply **going forward**; customers already on a plan keep their terms.
 - Prefer the dashboard plan builder for anything non-trivial (live preview) — the MCP is the
-  fallback. See [`ui-links.md`](ui-links.md) and `SKILL.md` step 3.
+  fallback. See [`ui-links.md`](ui-links.md) and [the plan states in `SKILL.md`](../SKILL.md#s13s15--plan).
 
 ## See also
 [`credit.md`](credit.md) · [`outcome.md`](outcome.md) · [`unit.md`](unit.md) ·

@@ -4,8 +4,9 @@ ClockNext bills a product out of a small set of building blocks. This file is th
 guide** — what each one is, and which to reach for. Each has its own deep reference (pricing
 math, exact MCP tool fields, runtime signal, worked examples); open the one you're working on.
 
-Ground anything you're unsure about in the docs first (`clocknext_search_docs kind=concept`) —
-this is a curated summary, not the source of truth.
+Ground anything you're unsure about in the docs first: call `clocknext_search_docs kind=concept`
+and then `clocknext_get_doc` for the matching result. This is a curated summary, not the
+source of truth.
 
 ## The blocks
 

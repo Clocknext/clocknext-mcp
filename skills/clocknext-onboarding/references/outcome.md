@@ -63,4 +63,5 @@ See [`plans.md`](plans.md).
 - **Making a non-LLM step an outcome step.** Fixed-cost events are [units](unit.md).
 - **Expecting per-step billing.** You're billed per *completed outcome*, once.
 - **Forgetting `complete: true`.** Without it a run never bills — it stays open and free.
-- **Non-unique step names / agent keys** within one outcome — each must be unique.
+- **Non-unique step names / agent keys** within one outcome — each must be unique, and every
+  `agentKey` must also be unique across the organization.
