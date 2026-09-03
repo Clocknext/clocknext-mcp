@@ -14,10 +14,13 @@ two money gates are the guardrails.
    sending anything real.
 3. **One real signal** — ⛔ **money gate 2: ask first, alone, and wait** (the purchase
    approval did NOT authorize this — a real signal draws down a real balance). Only after
-   that yes, run the product path (or `clocknext_record_usage`) so a real signal fires for
-   the dummy customer. Why: only real traffic proves the wiring end-to-end.
-4. **Read it back** (why: a signal that "sent" isn't proof — you confirm it *landed and
-   produced the expected usage record*):
+   that yes, run **the product's own code path** so a real signal fires for the dummy
+   customer. There is no MCP tool that records usage — the MCP prices signals and never
+   bills — so the product's SDK call is the only way, and it is also the point: only real
+   traffic through your own code proves the wiring end-to-end.
+4. **Read it back** (why: a signal that "sent" isn't proof — ingest is **asynchronous**, so
+   a signal your code accepted can still be rejected downstream, e.g. an `agentKey` that
+   matches nothing. You confirm it *landed and produced the expected usage record*):
    - `clocknext_get_customer_usage` → the log landed with the expected model, tokens, cost.
    - `clocknext_get_customer_balances` → credits/outcomes drew down as expected.
    - For **Units**, read Unit usage/event counts through the product SDK/API's supported Unit

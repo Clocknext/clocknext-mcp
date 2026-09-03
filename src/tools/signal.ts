@@ -2,9 +2,14 @@ import { z } from "zod";
 import type { Signal } from "@clocknext/sdk";
 
 /**
- * The shared zod input shape for a usage signal, used by both the verify and
- * record tools. Kept flat (a ZodRawShape) as MCP tool inputs must be — the
- * per-type requirement (agentKey for credit/outcome) is enforced in `buildSignal`.
+ * The zod input shape for a usage signal, used by `clocknext_verify_signal`.
+ * Kept flat (a ZodRawShape) as MCP tool inputs must be — the per-type
+ * requirement (agentKey for credit/outcome) is enforced in `buildSignal`.
+ *
+ * There is deliberately NO record/track counterpart: the MCP prices signals but
+ * never bills. Real signals are fired by the product's own code via
+ * `@clocknext/sdk` (`signals.credit/wallet/outcome`), which is also the only way
+ * to prove the integration end-to-end.
  */
 export const signalShape = {
   type: z
@@ -50,11 +55,11 @@ export const signalShape = {
     .boolean()
     .optional()
     .describe(
-      "Outcome only: set true on the LAST step's signal to declare the run finished — that is what bills the outcome (completion is declared by you, never inferred from step counts). Replaying a completed run bills nothing.",
+      "Outcome only: set true on the LAST step's signal to declare the run finished — that is what bills the outcome (completion is declared by you, never inferred from step counts). Replaying a completed run bills nothing. NOTE: on a dry run this flag changes nothing you can observe — a dry run opens and closes no run, so it always reports closedRun:false and prices only THIS step's tokens, never the outcome's pricePerOutcome. Use it to confirm the step key and customer resolve; read pricePerOutcome from clocknext_get_outcome for the completion charge.",
     ),
 };
 
-/** Args after zod parsing (plus the record-only idempotencyKey). */
+/** Args after zod parsing. */
 export interface SignalArgs {
   type: "wallet" | "credit" | "outcome";
   customerId: string;
@@ -66,7 +71,6 @@ export interface SignalArgs {
   member?: string;
   runId?: string;
   complete?: boolean;
-  idempotencyKey?: string;
 }
 
 /** Map tool args to an SDK `Signal`, or return a validation error message. */
@@ -81,7 +85,6 @@ export function buildSignal(a: SignalArgs): Signal | { error: string } {
     model: a.model,
     tokens,
     ...(a.member ? { member: a.member } : {}),
-    ...(a.idempotencyKey ? { idempotencyKey: a.idempotencyKey } : {}),
   };
   if (a.type === "wallet") return { type: "wallet", ...common };
   if (!a.agentKey) {

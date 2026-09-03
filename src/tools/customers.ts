@@ -53,7 +53,7 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
         "",
         "Rules:",
         "- `name` and `email` are required; everything else is optional profile.",
-        "- Returns the customer `id` — pass it as `customerId` to clocknext_create_purchase and clocknext_record_usage.",
+        "- Returns the customer `id` — pass it as `customerId` to clocknext_create_purchase and to the signals your product code sends.",
       ].join("\n"),
       inputSchema: customerFields,
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true },
@@ -111,7 +111,7 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
     {
       title: "ClockNext: get customer usage",
       description:
-        "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed — e.g. after running the product's code so it fires a real signal, check the event shows up with the expected model, tokens, and cost. For a signal you fire directly, clocknext_record_usage already returns the priced log inline, so this is mainly for signals sent by the running codebase.",
+        "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed — after running the product's code so it fires a real signal, check the event shows up with the expected model, tokens, and cost. This is the ONLY proof a real signal landed: the MCP cannot record usage, and ingest is asynchronous, so a signal your code 'sent' is not billed until it appears here.",
       inputSchema: {
         id: z.string().describe("The ClockNext customer id."),
         limit: z

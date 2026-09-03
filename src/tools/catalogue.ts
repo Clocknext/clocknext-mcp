@@ -234,6 +234,12 @@ const outcomeStep = z.object({
 
 const outcomeInput: z.ZodRawShape = {
   name: z.string().min(1).describe("Outcome name."),
+  agentKey: z
+    .string()
+    .min(1)
+    .describe(
+      "The OUTCOME's own stable key — REQUIRED, unique org-wide, chars [a-z0-9._-]. Distinct from a step's agentKey and in a separate namespace: usage is still reported against a STEP's key, never this one. This identifies the outcome itself (mirrors a credit's agentKey); a rename never changes it.",
+    ),
   description: z.string().nullish().describe("Optional human-readable description."),
   isActive: z.boolean().optional().describe("Whether the outcome is active/sellable."),
   marginPercent: z
@@ -291,13 +297,20 @@ function registerCrud(
   opts: {
     resource: string; // singular, e.g. "plan"
     plural: string; // e.g. "plans"
+    /** Whether this resource's full-edit endpoint actually honours `isActive`.
+     *  VERIFIED against the live API, and it is NOT uniform: plan / outcome /
+     *  unit updates DO flip active state, credit updates do not (the backend's
+     *  credit schema has no isActive, so `creditInput` omits it too). The
+     *  archive/unarchive descriptions below are generated from this, so they
+     *  can't drift back into claiming a blanket rule that isn't true. */
+    updateHonoursIsActive: boolean;
     api: Api;
     input: z.ZodRawShape;
     desc: { list: string; get: string; create: string; update: string; archive: string };
     priceInput?: PriceInput;
   },
 ): void {
-  const { resource, plural, api, input, desc, priceInput } = opts;
+  const { resource, plural, api, input, desc, priceInput, updateHonoursIsActive } = opts;
 
   server.registerTool(
     `clocknext_list_${plural}`,
@@ -308,16 +321,25 @@ function registerCrud(
         active: z
           .boolean()
           .optional()
-          .describe(`Only return active ${plural} when true; omit to return all.`),
+          .describe(
+            `Filter by active state: true = only active ${plural}, false = only archived ${plural}, omit = all.`,
+          ),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ active }) => {
       try {
         const rows = await api.list(active === undefined ? {} : { active });
+        // The API only special-cases `active=true`; `active=false` comes back
+        // unfiltered. Filter here so the documented contract holds both ways
+        // (a no-op for `true`, which the backend already narrowed).
+        const filtered =
+          active === undefined || !Array.isArray(rows)
+            ? rows
+            : (rows as { isActive?: boolean }[]).filter((r) => r.isActive === active);
         return jsonResult({
-          count: Array.isArray(rows) ? rows.length : undefined,
-          [plural]: rows,
+          count: Array.isArray(filtered) ? filtered.length : undefined,
+          [plural]: filtered,
         });
       } catch (err) {
         return errorResult(errMsg(err));
@@ -417,8 +439,9 @@ function registerCrud(
     },
   );
 
-  // The bare active toggle is the ONLY reliable reactivation path: the backend's
-  // full-edit schemas drop isActive, so `update_*` cannot un-archive anything.
+  // The bare active toggle is the explicit reactivation path. Whether the
+  // full edit ALSO flips isActive differs per resource (see
+  // `updateHonoursIsActive`), so the wording below is generated, not asserted.
   server.registerTool(
     `clocknext_unarchive_${resource}`,
     {
@@ -427,7 +450,9 @@ function registerCrud(
         `Reactivate an archived ${resource} (sets isActive→true) — the reverse of clocknext_archive_${resource}. Same identity, same definition; nothing is re-priced or rewritten.`,
         "",
         "Rules:",
-        `- This is the ONLY way to reactivate via the MCP — clocknext_update_${resource} cannot flip active state (the backend's full edit ignores isActive).`,
+        updateHonoursIsActive
+          ? `- Prefer this over clocknext_update_${resource}: that full edit CAN also set isActive, but it rewrites the whole ${resource} at the same time. This tool changes active state and nothing else.`
+          : `- This is the ONLY way to reactivate via the MCP — clocknext_update_${resource} has no isActive field, so a full edit cannot flip active state.`,
         `- Prefer this over creating a replacement: agentKeys/identities are unique org-wide, so a parked ${resource} must be revived, never duplicated.`,
       ].join("\n"),
       inputSchema: { id: z.string().describe(`The ${resource} id to reactivate.`) },
@@ -455,6 +480,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
   registerCrud(server, {
     resource: "plan",
     plural: "plans",
+    updateHonoursIsActive: true,
     api: {
       list: (p) => cnk.plans.list(p),
       get: (id) => cnk.plans.get(id),
@@ -464,7 +490,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
     },
     input: planInput,
     desc: {
-      list: "List the organisation's billing plans (id, name, billing cycle, price, active). Find a plan id, or see what's on offer. Pass active=true for only sellable plans.",
+      list: "List the organisation's billing plans (id, name, billing cycle, price, active). Find a plan id, or see what's on offer. Pass active=true for only sellable plans, active=false for only archived ones.",
       get: "Get one plan in full by id — its entitlement components (wallet/credit/outcome/unit/flat), billing cycle, currency and active state.",
       create: [
         "Create a billing plan bundling one or more entitlement `components`: WALLET (prepaid USD balance, debited at raw model cost — no margin), FLAT (one-off fee), or CREDIT/OUTCOME/UNIT entitlements referencing an existing resource by id.",
@@ -489,7 +515,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- History is kept and customers already on it are unaffected; it just becomes unsellable and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_plan (update_plan canNOT flip active state — the backend ignores isActive on a full edit).",
+        "- Reversible: reactivate with clocknext_unarchive_plan. clocknext_update_plan can also set isActive, but it rewrites the entire plan — use unarchive when all you want is to switch it back on.",
         "- Unrelated to cancelling a customer's purchase or ending a subscription.",
       ].join("\n"),
     },
@@ -498,6 +524,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
   registerCrud(server, {
     resource: "credit",
     plural: "credits",
+    updateHonoursIsActive: false,
     api: {
       list: (p) => cnk.credits.list(p),
       get: (id) => cnk.credits.get(id),
@@ -551,7 +578,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- Full rewrite, not a patch — omitted fields are cleared. Read it first with clocknext_get_credit.",
-        "- Pricing is re-grounded from the `models` mixer you pass (same as create). To flip active state use clocknext_archive_credit / clocknext_unarchive_credit — isActive is ignored here.",
+        "- Pricing is re-grounded from the `models` mixer you pass (same as create). This tool has NO isActive field — to change active state use clocknext_archive_credit / clocknext_unarchive_credit.",
         "- Changing `agentKey` re-points which runtime signals map here — do it deliberately.",
       ].join("\n"),
       archive: [
@@ -559,7 +586,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- Recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it); it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_credit (update_credit canNOT flip active state — the backend ignores isActive on a full edit).",
+        "- Reversible: reactivate with clocknext_unarchive_credit — the ONLY way, since clocknext_update_credit has no isActive field (unlike plans/outcomes/units).",
         "- Unrelated to archiving a customer, ending a purchase, or clearing a balance.",
       ].join("\n"),
     },
@@ -568,6 +595,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
   registerCrud(server, {
     resource: "outcome",
     plural: "outcomes",
+    updateHonoursIsActive: true,
     api: {
       list: (p) => cnk.outcomes.list(p),
       get: (id) => cnk.outcomes.get(id),
@@ -580,6 +608,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
     priceInput: async (args) => {
       const a = args as {
         name: string;
+        agentKey: string;
         description?: string | null;
         isActive?: boolean;
         marginPercent: number;
@@ -600,6 +629,9 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
       }
       return {
         name: a.name,
+        // Required by POST/PATCH /api/v1/outcomes — the outcome's own org-wide
+        // key, separate from the step keys ingest resolves against.
+        agentKey: a.agentKey,
         ...(a.description != null ? { description: a.description } : {}),
         ...(a.isActive != null ? { isActive: a.isActive } : {}),
         basePrice: total,
@@ -615,6 +647,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "Create an outcome — a multi-step LLM deliverable billed per COMPLETED outcome. Each of the 1–50 `steps` has its own `agentKey` and model mixer.",
         "",
         "Rules:",
+        "- TWO kinds of agent key, both required and both unique org-wide, in separate namespaces: the outcome's own top-level `agentKey` (its identity), and each step's `agentKey` (what usage is reported against). Never reuse one as the other.",
         "- Price is model-grounded: each step's base cost is computed from live model prices, summed, then `marginPercent` applied. Never hand-typed.",
         "- Every step is an LLM step. A fixed-cost / non-LLM event (an upload, an export) is a UNIT, not an outcome step.",
         "- Prefer the dashboard outcomes builder (https://payments.clocknext.com/outcomes); this is the fallback.",
@@ -625,6 +658,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- Full rewrite, not a patch — omitted steps/fields are dropped. Read it first with clocknext_get_outcome.",
+        "- The outcome's own `agentKey` is REQUIRED here too — pass back the existing one (clocknext_get_outcome returns it) unless you deliberately mean to change the outcome's identity.",
         "- Each step's price is re-grounded from its `models` mixer (same as create).",
         "- Step agent keys are the runtime binding — change them deliberately.",
       ].join("\n"),
@@ -633,7 +667,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- Steps and any in-flight/completed history are kept; existing plans and in-progress outcomes are unaffected; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_outcome (update_outcome canNOT flip active state — the backend ignores isActive on a full edit).",
+        "- Reversible: reactivate with clocknext_unarchive_outcome. clocknext_update_outcome can also set isActive, but it rewrites the whole outcome (steps included) — use unarchive when all you want is to switch it back on.",
         "- Unrelated to archiving a customer or ending a purchase.",
       ].join("\n"),
     },
@@ -642,6 +676,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
   registerCrud(server, {
     resource: "unit",
     plural: "units",
+    updateHonoursIsActive: true,
     api: {
       list: (p) => cnk.units.list(p),
       get: (id) => cnk.units.get(id),
@@ -674,7 +709,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void 
         "",
         "Rules:",
         "- Recorded usage is kept and existing plans metering it keep working; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_unit (update_unit canNOT flip active state — the backend ignores isActive on a full edit).",
+        "- Reversible: reactivate with clocknext_unarchive_unit. clocknext_update_unit can also set isActive, but it rewrites the whole unit — use unarchive when all you want is to switch it back on.",
         "- Unrelated to archiving a customer or ending a purchase.",
       ].join("\n"),
     },

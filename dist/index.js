@@ -21364,7 +21364,7 @@ function computeBackoff(attempt, opts, retryAfterMs, rand = Math.random) {
 function sleep(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
 }
-var SDK_VERSION = "0.7.0";
+var SDK_VERSION = "0.8.0";
 var Transport = class {
   constructor(cfg) {
     this.cfg = cfg;
@@ -22004,6 +22004,13 @@ var Signals = class {
   transport;
   flusher;
   cfg;
+  /**
+   * Record one usage signal. `POST /api/v1/usage`.
+   *
+   * Returns as soon as the signal is buffered (async mode) or the request has
+   * been answered (`{ wait: true }` / sync mode). See {@link TrackResult}: a
+   * resolved promise means "accepted", which is not the same as "billed".
+   */
   async track(signal, opts = {}) {
     const body = signalToWire(signal);
     if (body.idempotencyKey == null) body.idempotencyKey = newKey();
@@ -22020,8 +22027,9 @@ var Signals = class {
       retry: true
     });
     return {
-      queued: false,
-      usageLog: res.usageLog ?? null
+      queued: res.queued === true,
+      usageLog: res.usageLog ?? null,
+      ...res.messageId != null ? { messageId: res.messageId } : {}
     };
   }
   /**
@@ -22303,10 +22311,11 @@ function registerAddModel(server, cnk) {
     {
       title: "ClockNext: add (enable) a model",
       description: [
-        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. Autopriced from ClockNext's catalog \u2014 you never set prices here.",
+        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_verify_signal and in the signals your product code sends, and it appears in clocknext_list_models. Autopriced from ClockNext's catalog \u2014 you never set prices here.",
         "",
         "Rules:",
-        "- Only models in ClockNext's pricing catalog can be added. clocknext_list_models shows what is ALREADY enabled (check it to avoid re-adding); the addable catalog itself is browsable on the Models page. If the add fails, the model or provider isn't in the catalog.",
+        "- Only models in ClockNext's pricing catalog can be added. clocknext_list_models shows what is ALREADY enabled; the addable catalog itself is browsable on the Models page. If the add fails, the model or provider isn't in the catalog.",
+        "- Re-adding a model that is already enabled is a safe no-op: it succeeds and returns `alreadyEnabled: true` with the live prices.",
         "- If the catalog has no price for it, the model is enabled but meters at $0; the tool returns a Models-page link and a `warning` so you can set pricing."
       ].join("\n"),
       inputSchema: {
@@ -22338,8 +22347,9 @@ function registerAddModel(server, cnk) {
           signal: AbortSignal.timeout(1e4)
         });
         const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          const reason = json.statusDetail?.message || json.error || json.message || `HTTP ${res.status}`;
+        const reason = json.statusDetail?.message || json.error || json.message || `HTTP ${res.status}`;
+        const alreadyEnabled = /already enabled/i.test(reason);
+        if (!res.ok && !alreadyEnabled) {
           return errorResult(
             `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. Browse the addable catalog on the Models page (${modelsPage}); clocknext_list_models only shows what's already enabled.`
           );
@@ -22351,6 +22361,7 @@ function registerAddModel(server, cnk) {
             ok: true,
             provider,
             model,
+            ...alreadyEnabled ? { alreadyEnabled: true } : {},
             priced: false,
             warning: `"${model}" is enabled but has NO price in the catalog \u2014 usage will meter at $0. Set its input/output/cache pricing on the Models page: ${modelsPage}`,
             modelsPage
@@ -22360,6 +22371,7 @@ function registerAddModel(server, cnk) {
           ok: true,
           provider,
           model,
+          ...alreadyEnabled ? { alreadyEnabled: true } : {},
           priced: added != null ? true : void 0,
           ...added ? {
             prices: {
@@ -22489,6 +22501,9 @@ var outcomeStep = external_exports.object({
 });
 var outcomeInput = {
   name: external_exports.string().min(1).describe("Outcome name."),
+  agentKey: external_exports.string().min(1).describe(
+    "The OUTCOME's own stable key \u2014 REQUIRED, unique org-wide, chars [a-z0-9._-]. Distinct from a step's agentKey and in a separate namespace: usage is still reported against a STEP's key, never this one. This identifies the outcome itself (mirrors a credit's agentKey); a rename never changes it."
+  ),
   description: external_exports.string().nullish().describe("Optional human-readable description."),
   isActive: external_exports.boolean().optional().describe("Whether the outcome is active/sellable."),
   marginPercent: external_exports.number().min(0).describe("Markup over the summed step base costs, as a percent (100 = double = pricePerOutcome)."),
@@ -22506,23 +22521,26 @@ var unitInput = {
   isActive: external_exports.boolean().optional().describe("Whether the unit is active/sellable.")
 };
 function registerCrud(server, opts) {
-  const { resource, plural, api, input, desc, priceInput } = opts;
+  const { resource, plural, api, input, desc, priceInput, updateHonoursIsActive } = opts;
   server.registerTool(
     `clocknext_list_${plural}`,
     {
       title: `ClockNext: list ${plural}`,
       description: desc.list,
       inputSchema: {
-        active: external_exports.boolean().optional().describe(`Only return active ${plural} when true; omit to return all.`)
+        active: external_exports.boolean().optional().describe(
+          `Filter by active state: true = only active ${plural}, false = only archived ${plural}, omit = all.`
+        )
       },
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
     async ({ active }) => {
       try {
         const rows = await api.list(active === void 0 ? {} : { active });
+        const filtered = active === void 0 || !Array.isArray(rows) ? rows : rows.filter((r) => r.isActive === active);
         return jsonResult({
-          count: Array.isArray(rows) ? rows.length : void 0,
-          [plural]: rows
+          count: Array.isArray(filtered) ? filtered.length : void 0,
+          [plural]: filtered
         });
       } catch (err) {
         return errorResult(errMsg(err));
@@ -22625,7 +22643,7 @@ function registerCrud(server, opts) {
         `Reactivate an archived ${resource} (sets isActive\u2192true) \u2014 the reverse of clocknext_archive_${resource}. Same identity, same definition; nothing is re-priced or rewritten.`,
         "",
         "Rules:",
-        `- This is the ONLY way to reactivate via the MCP \u2014 clocknext_update_${resource} cannot flip active state (the backend's full edit ignores isActive).`,
+        updateHonoursIsActive ? `- Prefer this over clocknext_update_${resource}: that full edit CAN also set isActive, but it rewrites the whole ${resource} at the same time. This tool changes active state and nothing else.` : `- This is the ONLY way to reactivate via the MCP \u2014 clocknext_update_${resource} has no isActive field, so a full edit cannot flip active state.`,
         `- Prefer this over creating a replacement: agentKeys/identities are unique org-wide, so a parked ${resource} must be revived, never duplicated.`
       ].join("\n"),
       inputSchema: { id: external_exports.string().describe(`The ${resource} id to reactivate.`) },
@@ -22650,6 +22668,7 @@ function registerCatalogueTools(server, cnk) {
   registerCrud(server, {
     resource: "plan",
     plural: "plans",
+    updateHonoursIsActive: true,
     api: {
       list: (p) => cnk.plans.list(p),
       get: (id) => cnk.plans.get(id),
@@ -22659,7 +22678,7 @@ function registerCatalogueTools(server, cnk) {
     },
     input: planInput,
     desc: {
-      list: "List the organisation's billing plans (id, name, billing cycle, price, active). Find a plan id, or see what's on offer. Pass active=true for only sellable plans.",
+      list: "List the organisation's billing plans (id, name, billing cycle, price, active). Find a plan id, or see what's on offer. Pass active=true for only sellable plans, active=false for only archived ones.",
       get: "Get one plan in full by id \u2014 its entitlement components (wallet/credit/outcome/unit/flat), billing cycle, currency and active state.",
       create: [
         "Create a billing plan bundling one or more entitlement `components`: WALLET (prepaid USD balance, debited at raw model cost \u2014 no margin), FLAT (one-off fee), or CREDIT/OUTCOME/UNIT entitlements referencing an existing resource by id.",
@@ -22684,7 +22703,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- History is kept and customers already on it are unaffected; it just becomes unsellable and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_plan (update_plan canNOT flip active state \u2014 the backend ignores isActive on a full edit).",
+        "- Reversible: reactivate with clocknext_unarchive_plan. clocknext_update_plan can also set isActive, but it rewrites the entire plan \u2014 use unarchive when all you want is to switch it back on.",
         "- Unrelated to cancelling a customer's purchase or ending a subscription."
       ].join("\n")
     }
@@ -22692,6 +22711,7 @@ function registerCatalogueTools(server, cnk) {
   registerCrud(server, {
     resource: "credit",
     plural: "credits",
+    updateHonoursIsActive: false,
     api: {
       list: (p) => cnk.credits.list(p),
       get: (id) => cnk.credits.get(id),
@@ -22737,7 +22757,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Full rewrite, not a patch \u2014 omitted fields are cleared. Read it first with clocknext_get_credit.",
-        "- Pricing is re-grounded from the `models` mixer you pass (same as create). To flip active state use clocknext_archive_credit / clocknext_unarchive_credit \u2014 isActive is ignored here.",
+        "- Pricing is re-grounded from the `models` mixer you pass (same as create). This tool has NO isActive field \u2014 to change active state use clocknext_archive_credit / clocknext_unarchive_credit.",
         "- Changing `agentKey` re-points which runtime signals map here \u2014 do it deliberately."
       ].join("\n"),
       archive: [
@@ -22745,7 +22765,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it); it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_credit (update_credit canNOT flip active state \u2014 the backend ignores isActive on a full edit).",
+        "- Reversible: reactivate with clocknext_unarchive_credit \u2014 the ONLY way, since clocknext_update_credit has no isActive field (unlike plans/outcomes/units).",
         "- Unrelated to archiving a customer, ending a purchase, or clearing a balance."
       ].join("\n")
     }
@@ -22753,6 +22773,7 @@ function registerCatalogueTools(server, cnk) {
   registerCrud(server, {
     resource: "outcome",
     plural: "outcomes",
+    updateHonoursIsActive: true,
     api: {
       list: (p) => cnk.outcomes.list(p),
       get: (id) => cnk.outcomes.get(id),
@@ -22779,6 +22800,9 @@ function registerCatalogueTools(server, cnk) {
       }
       return {
         name: a.name,
+        // Required by POST/PATCH /api/v1/outcomes — the outcome's own org-wide
+        // key, separate from the step keys ingest resolves against.
+        agentKey: a.agentKey,
         ...a.description != null ? { description: a.description } : {},
         ...a.isActive != null ? { isActive: a.isActive } : {},
         basePrice: total,
@@ -22794,6 +22818,7 @@ function registerCatalogueTools(server, cnk) {
         "Create an outcome \u2014 a multi-step LLM deliverable billed per COMPLETED outcome. Each of the 1\u201350 `steps` has its own `agentKey` and model mixer.",
         "",
         "Rules:",
+        "- TWO kinds of agent key, both required and both unique org-wide, in separate namespaces: the outcome's own top-level `agentKey` (its identity), and each step's `agentKey` (what usage is reported against). Never reuse one as the other.",
         "- Price is model-grounded: each step's base cost is computed from live model prices, summed, then `marginPercent` applied. Never hand-typed.",
         "- Every step is an LLM step. A fixed-cost / non-LLM event (an upload, an export) is a UNIT, not an outcome step.",
         "- Prefer the dashboard outcomes builder (https://payments.clocknext.com/outcomes); this is the fallback.",
@@ -22804,6 +22829,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Full rewrite, not a patch \u2014 omitted steps/fields are dropped. Read it first with clocknext_get_outcome.",
+        "- The outcome's own `agentKey` is REQUIRED here too \u2014 pass back the existing one (clocknext_get_outcome returns it) unless you deliberately mean to change the outcome's identity.",
         "- Each step's price is re-grounded from its `models` mixer (same as create).",
         "- Step agent keys are the runtime binding \u2014 change them deliberately."
       ].join("\n"),
@@ -22812,7 +22838,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Steps and any in-flight/completed history are kept; existing plans and in-progress outcomes are unaffected; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_outcome (update_outcome canNOT flip active state \u2014 the backend ignores isActive on a full edit).",
+        "- Reversible: reactivate with clocknext_unarchive_outcome. clocknext_update_outcome can also set isActive, but it rewrites the whole outcome (steps included) \u2014 use unarchive when all you want is to switch it back on.",
         "- Unrelated to archiving a customer or ending a purchase."
       ].join("\n")
     }
@@ -22820,6 +22846,7 @@ function registerCatalogueTools(server, cnk) {
   registerCrud(server, {
     resource: "unit",
     plural: "units",
+    updateHonoursIsActive: true,
     api: {
       list: (p) => cnk.units.list(p),
       get: (id) => cnk.units.get(id),
@@ -22852,7 +22879,7 @@ function registerCatalogueTools(server, cnk) {
         "",
         "Rules:",
         "- Recorded usage is kept and existing plans metering it keep working; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_unit (update_unit canNOT flip active state \u2014 the backend ignores isActive on a full edit).",
+        "- Reversible: reactivate with clocknext_unarchive_unit. clocknext_update_unit can also set isActive, but it rewrites the whole unit \u2014 use unarchive when all you want is to switch it back on.",
         "- Unrelated to archiving a customer or ending a purchase."
       ].join("\n")
     }
@@ -22889,7 +22916,7 @@ function registerCustomerTools(server, cnk) {
         "",
         "Rules:",
         "- `name` and `email` are required; everything else is optional profile.",
-        "- Returns the customer `id` \u2014 pass it as `customerId` to clocknext_create_purchase and clocknext_record_usage."
+        "- Returns the customer `id` \u2014 pass it as `customerId` to clocknext_create_purchase and to the signals your product code sends."
       ].join("\n"),
       inputSchema: customerFields,
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true }
@@ -22942,7 +22969,7 @@ function registerCustomerTools(server, cnk) {
     "clocknext_get_customer_usage",
     {
       title: "ClockNext: get customer usage",
-      description: "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed \u2014 e.g. after running the product's code so it fires a real signal, check the event shows up with the expected model, tokens, and cost. For a signal you fire directly, clocknext_record_usage already returns the priced log inline, so this is mainly for signals sent by the running codebase.",
+      description: "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed \u2014 after running the product's code so it fires a real signal, check the event shows up with the expected model, tokens, and cost. This is the ONLY proof a real signal landed: the MCP cannot record usage, and ingest is asynchronous, so a signal your code 'sent' is not billed until it appears here.",
       inputSchema: {
         id: external_exports.string().describe("The ClockNext customer id."),
         limit: external_exports.number().int().min(1).max(100).optional().describe("Max usage rows to return (most recent first).")
@@ -23162,95 +23189,6 @@ function registerListModels(server, cnk) {
   );
 }
 
-// src/tools/signal.ts
-var signalShape = {
-  type: external_exports.enum(["wallet", "credit", "outcome"]).describe(
-    "Which meter to record against: 'wallet' debits USD at the model's cost; 'credit' draws down a named credit; 'outcome' advances one step of a run (set complete:true on the last step to bill it)."
-  ),
-  customerId: external_exports.string().min(1).describe("The ClockNext customer id (e.g. cus_\u2026) this usage belongs to."),
-  model: external_exports.string().min(1).describe(
-    "Catalog model id (e.g. 'gpt-4o'), matched case-insensitively. Use clocknext_list_models to see valid ids."
-  ),
-  inputTokens: external_exports.number().int().min(0).describe("Prompt tokens for this call."),
-  outputTokens: external_exports.number().int().min(0).describe("Completion tokens for this call."),
-  cacheTokens: external_exports.number().int().min(0).optional().describe("Cached (prompt-cache) tokens; defaults to 0 when omitted."),
-  agentKey: external_exports.string().optional().describe(
-    "Required for type 'credit' (the credit's agent key) or 'outcome' (the outcome step's agent key). Ignored for 'wallet'."
-  ),
-  member: external_exports.string().optional().describe("Optional customer-member email to attribute the usage to."),
-  runId: external_exports.string().optional().describe(
-    "REQUIRED for type 'outcome' (ignored otherwise): your stable id for ONE deliverable run, unique per organisation. Every step signal of the same run sends the same runId."
-  ),
-  complete: external_exports.boolean().optional().describe(
-    "Outcome only: set true on the LAST step's signal to declare the run finished \u2014 that is what bills the outcome (completion is declared by you, never inferred from step counts). Replaying a completed run bills nothing."
-  )
-};
-function buildSignal(a) {
-  const tokens = {
-    input: a.inputTokens,
-    output: a.outputTokens,
-    ...a.cacheTokens != null ? { cache: a.cacheTokens } : {}
-  };
-  const common = {
-    customerId: a.customerId,
-    model: a.model,
-    tokens,
-    ...a.member ? { member: a.member } : {},
-    ...a.idempotencyKey ? { idempotencyKey: a.idempotencyKey } : {}
-  };
-  if (a.type === "wallet") return { type: "wallet", ...common };
-  if (!a.agentKey) {
-    return { error: `agentKey is required for a '${a.type}' signal.` };
-  }
-  if (a.type === "outcome") {
-    if (!a.runId) {
-      return { error: "runId is required for an 'outcome' signal \u2014 it groups the step signals of one deliverable run." };
-    }
-    return {
-      type: "outcome",
-      ...common,
-      agentKey: a.agentKey,
-      runId: a.runId,
-      ...a.complete != null ? { complete: a.complete } : {}
-    };
-  }
-  return { type: a.type, ...common, agentKey: a.agentKey };
-}
-
-// src/tools/record-usage.ts
-function registerRecordUsage(server, cnk) {
-  server.registerTool(
-    "clocknext_record_usage",
-    {
-      title: "ClockNext: record usage",
-      description: [
-        "Record ONE real usage signal. Prices the tokens against the model and the customer's plan and returns the resulting usage log.",
-        "",
-        "Rules:",
-        "- \u26D4 Bills for real. Only call this after the user explicitly approved THIS signal in a question dedicated to it alone, in this conversation \u2014 an earlier or bundled 'yes' (e.g. to a purchase) does NOT count. For a no-op price preview, use clocknext_verify_signal instead.",
-        "- Reuse the SAME idempotencyKey across retries of one event so a lost response can't double-record it."
-      ].join("\n"),
-      inputSchema: {
-        ...signalShape,
-        idempotencyKey: external_exports.string().optional().describe(
-          "Dedup key. Reuse the SAME value across retries of one logical event; a repeat returns the original result instead of recording again."
-        )
-      },
-      annotations: { idempotentHint: false, openWorldHint: true }
-    },
-    async (args) => {
-      const signal = buildSignal(args);
-      if ("error" in signal) return errorResult(signal.error);
-      try {
-        const res = await cnk.signals.track(signal, { wait: true });
-        return jsonResult({ recorded: true, usageLog: res.usageLog });
-      } catch (err) {
-        return errorResult(errMsg(err));
-      }
-    }
-  );
-}
-
 // src/tools/search-docs.ts
 var DOCS_URL2 = resolveDocsUrl();
 var DESCRIPTION2 = [
@@ -23303,13 +23241,73 @@ function registerSearchDocs(server) {
   );
 }
 
+// src/tools/signal.ts
+var signalShape = {
+  type: external_exports.enum(["wallet", "credit", "outcome"]).describe(
+    "Which meter to record against: 'wallet' debits USD at the model's cost; 'credit' draws down a named credit; 'outcome' advances one step of a run (set complete:true on the last step to bill it)."
+  ),
+  customerId: external_exports.string().min(1).describe("The ClockNext customer id (e.g. cus_\u2026) this usage belongs to."),
+  model: external_exports.string().min(1).describe(
+    "Catalog model id (e.g. 'gpt-4o'), matched case-insensitively. Use clocknext_list_models to see valid ids."
+  ),
+  inputTokens: external_exports.number().int().min(0).describe("Prompt tokens for this call."),
+  outputTokens: external_exports.number().int().min(0).describe("Completion tokens for this call."),
+  cacheTokens: external_exports.number().int().min(0).optional().describe("Cached (prompt-cache) tokens; defaults to 0 when omitted."),
+  agentKey: external_exports.string().optional().describe(
+    "Required for type 'credit' (the credit's agent key) or 'outcome' (the outcome step's agent key). Ignored for 'wallet'."
+  ),
+  member: external_exports.string().optional().describe("Optional customer-member email to attribute the usage to."),
+  runId: external_exports.string().optional().describe(
+    "REQUIRED for type 'outcome' (ignored otherwise): your stable id for ONE deliverable run, unique per organisation. Every step signal of the same run sends the same runId."
+  ),
+  complete: external_exports.boolean().optional().describe(
+    "Outcome only: set true on the LAST step's signal to declare the run finished \u2014 that is what bills the outcome (completion is declared by you, never inferred from step counts). Replaying a completed run bills nothing. NOTE: on a dry run this flag changes nothing you can observe \u2014 a dry run opens and closes no run, so it always reports closedRun:false and prices only THIS step's tokens, never the outcome's pricePerOutcome. Use it to confirm the step key and customer resolve; read pricePerOutcome from clocknext_get_outcome for the completion charge."
+  )
+};
+function buildSignal(a) {
+  const tokens = {
+    input: a.inputTokens,
+    output: a.outputTokens,
+    ...a.cacheTokens != null ? { cache: a.cacheTokens } : {}
+  };
+  const common = {
+    customerId: a.customerId,
+    model: a.model,
+    tokens,
+    ...a.member ? { member: a.member } : {}
+  };
+  if (a.type === "wallet") return { type: "wallet", ...common };
+  if (!a.agentKey) {
+    return { error: `agentKey is required for a '${a.type}' signal.` };
+  }
+  if (a.type === "outcome") {
+    if (!a.runId) {
+      return { error: "runId is required for an 'outcome' signal \u2014 it groups the step signals of one deliverable run." };
+    }
+    return {
+      type: "outcome",
+      ...common,
+      agentKey: a.agentKey,
+      runId: a.runId,
+      ...a.complete != null ? { complete: a.complete } : {}
+    };
+  }
+  return { type: a.type, ...common, agentKey: a.agentKey };
+}
+
 // src/tools/verify-signal.ts
 function registerVerifySignal(server, cnk) {
   server.registerTool(
     "clocknext_verify_signal",
     {
       title: "ClockNext: verify signal (dry run)",
-      description: "Validate and PRICE a usage signal WITHOUT recording it \u2014 a dry run. Returns the projected usage log (cost, credits drawn, applied rules; may be null when the server computes no log) so you can confirm the customer, model, and plan are wired up correctly before sending real traffic. Records nothing and never bills.",
+      description: [
+        "Validate and PRICE a usage signal WITHOUT recording it \u2014 a dry run. Returns the projected usage log (cost, credits drawn, applied rules; may be null when the server computes no log) so you can confirm the customer, model, and plan are wired up correctly before sending real traffic. Records nothing and never bills.",
+        "",
+        "Rules:",
+        "- This is the ONLY signal tool. The MCP prices usage but never bills it; real signals come from the product's own code via @clocknext/sdk, and clocknext_get_customer_usage is what proves one landed.",
+        "- For type 'outcome' it prices THIS STEP's tokens only. A dry run opens and closes no run, so `complete: true` is not reflected (closedRun stays false) and the outcome's own pricePerOutcome never appears \u2014 read that from clocknext_get_outcome."
+      ].join("\n"),
       inputSchema: signalShape,
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
@@ -23450,11 +23448,10 @@ function registerWriteEnv(server) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.7.4" });
+  const server = new McpServer({ name: "clocknext", version: "0.8.0" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
-  registerRecordUsage(server, cnk);
   registerSearchDocs(server);
   registerGetDoc(server);
   registerCatalogueTools(server, cnk);

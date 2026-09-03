@@ -8,8 +8,13 @@ export function registerVerifySignal(server: McpServer, cnk: ClockNext): void {
     "clocknext_verify_signal",
     {
       title: "ClockNext: verify signal (dry run)",
-      description:
+      description: [
         "Validate and PRICE a usage signal WITHOUT recording it — a dry run. Returns the projected usage log (cost, credits drawn, applied rules; may be null when the server computes no log) so you can confirm the customer, model, and plan are wired up correctly before sending real traffic. Records nothing and never bills.",
+        "",
+        "Rules:",
+        "- This is the ONLY signal tool. The MCP prices usage but never bills it; real signals come from the product's own code via @clocknext/sdk, and clocknext_get_customer_usage is what proves one landed.",
+        "- For type 'outcome' it prices THIS STEP's tokens only. A dry run opens and closes no run, so `complete: true` is not reflected (closedRun stays false) and the outcome's own pricePerOutcome never appears — read that from clocknext_get_outcome.",
+      ].join("\n"),
       inputSchema: signalShape,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },

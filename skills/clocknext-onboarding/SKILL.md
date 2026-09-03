@@ -402,8 +402,12 @@ STOP. **The purchase yes did NOT cover this.** No earlier approval, blanket yes,
 mode substitutes for this question.
 
 ### S29 · Real signal
-Fire exactly one approved signal (`clocknext_record_usage`, or the product's real path),
-report it, then ask one question about entering verification. Do not read back usage in S29.
+Fire exactly one approved signal **through the product's own code path** (the SDK call you
+wired in). The MCP has **no record-usage tool** — it prices signals but never bills, so there
+is nothing to fall back on and you must never improvise one. Report that the code ran, then
+ask one question about entering verification. Do not read back usage in S29 — and do not
+call the run itself proof: ingest is asynchronous, so "the code ran" is not "the signal
+billed".
 
 ### S30 · Verify usage and balance
 Separately call `clocknext_get_customer_usage` (the log landed with expected

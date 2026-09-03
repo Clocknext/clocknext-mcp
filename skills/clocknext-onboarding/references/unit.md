@@ -47,8 +47,8 @@ Tiers (stored as `upTo`): **1–10 @ $5**, **11–25 @ $10**, **26+ @ $12**
 | --- | --- | --- |
 | 10 | 10·$5 = **$50** | 10·$5 = **$50** |
 | 11 | 10·$5 + 1·$10 = **$60** | 11·$10 = **$110** |
-| 25 | 10·$5 + 15·$10 = **$150** | 25·$10 = **$250** |
-| 30 | 10·$5 + 15·$10 + 5·$12 = **$230** | 30·$12 = **$360** |
+| 25 | 10·$5 + 15·$10 = **$200** | 25·$10 = **$250** |
+| 30 | 10·$5 + 15·$10 + 5·$12 = **$260** | 30·$12 = **$360** |
 
 Same tiers, very different bills once you cross a boundary. **SLAB rewards the first units at
 cheap rates; VOLUME re-prices everything at the reached tier.** Pick SLAB for "gentle graduated"

@@ -25,10 +25,11 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
     {
       title: "ClockNext: add (enable) a model",
       description: [
-        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_record_usage / clocknext_verify_signal and appears in clocknext_list_models. Autopriced from ClockNext's catalog — you never set prices here.",
+        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_verify_signal and in the signals your product code sends, and it appears in clocknext_list_models. Autopriced from ClockNext's catalog — you never set prices here.",
         "",
         "Rules:",
-        "- Only models in ClockNext's pricing catalog can be added. clocknext_list_models shows what is ALREADY enabled (check it to avoid re-adding); the addable catalog itself is browsable on the Models page. If the add fails, the model or provider isn't in the catalog.",
+        "- Only models in ClockNext's pricing catalog can be added. clocknext_list_models shows what is ALREADY enabled; the addable catalog itself is browsable on the Models page. If the add fails, the model or provider isn't in the catalog.",
+        "- Re-adding a model that is already enabled is a safe no-op: it succeeds and returns `alreadyEnabled: true` with the live prices.",
         "- If the catalog has no price for it, the model is enabled but meters at $0; the tool returns a Models-page link and a `warning` so you can set pricing.",
       ].join("\n"),
       inputSchema: {
@@ -72,12 +73,18 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
           statusDetail?: { message?: string };
         };
 
-        if (!res.ok) {
+        const reason =
+          json.statusDetail?.message || json.error || json.message || `HTTP ${res.status}`;
+        // Re-adding an enabled model is the idempotent no-op this tool advertises
+        // (idempotentHint: true) — the backend calls it an error, but the caller's
+        // goal is already satisfied, so fall through to the price read-back rather
+        // than blaming a catalog that has nothing to do with it.
+        const alreadyEnabled = /already enabled/i.test(reason);
+
+        if (!res.ok && !alreadyEnabled) {
           // Only catalog models are supported, and the server returns the same
           // error whether the MODEL or the PROVIDER is unknown — so guide the
           // caller for both without offering a manual path that won't work.
-          const reason =
-            json.statusDetail?.message || json.error || json.message || `HTTP ${res.status}`;
           return errorResult(
             `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. Browse the addable catalog on the Models page (${modelsPage}); clocknext_list_models only shows what's already enabled.`,
           );
@@ -102,6 +109,7 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
             ok: true,
             provider,
             model,
+            ...(alreadyEnabled ? { alreadyEnabled: true } : {}),
             priced: false,
             warning: `"${model}" is enabled but has NO price in the catalog — usage will meter at $0. Set its input/output/cache pricing on the Models page: ${modelsPage}`,
             modelsPage,
@@ -112,6 +120,7 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
           ok: true,
           provider,
           model,
+          ...(alreadyEnabled ? { alreadyEnabled: true } : {}),
           priced: added != null ? true : undefined,
           ...(added
             ? {

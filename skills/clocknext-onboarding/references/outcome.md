@@ -17,10 +17,17 @@ event (an upload, an export), that's a [unit](unit.md) — **not** an outcome st
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `name` | yes | Human label. |
+| `agentKey` | yes | The **outcome's own** stable key. Unique org-wide, `[a-z0-9._-]`. |
 | `marginPercent` | yes | Markup over the **summed** step base costs. `100` = double. |
 | `steps` | yes | **1–50 steps.** Each has its own `name`, its own `agentKey`, and its own **model mixer** (`models`). |
 | `description` | no | Optional. |
 | `isActive` | no | Sellable or not. |
+
+> **Two different agent keys — don't conflate them.** The outcome carries its own
+> `agentKey` (its identity, mirroring a credit's), and every step carries its own. They live
+> in **separate namespaces** and both must be unique across the organization. Usage is always
+> reported against a **step's** key — never the outcome's. Omitting the outcome-level
+> `agentKey` fails with a `400 ValidationError`.
 
 Each step is priced from its own mixer (same mechanics as a [credit](credit.md)); the tool sums
 the step base prices and applies the margin. A step that prices to **$0 is rejected** — give it
@@ -47,9 +54,13 @@ signals.outcome({ customerId, model, agentKey: "<step key>", tokens, runId, comp
 - Signals with `complete: false` are **attached to the run but cost nothing**.
 - The signal carrying **`complete: true` closes the run and bills exactly `pricePerOutcome` once.**
 - A duplicate `complete: true` is **idempotent** — no second charge.
-- The MCP test tools take the same fields: `clocknext_verify_signal` / `clocknext_record_usage`
-  with `type:"outcome"` require `runId` and accept `complete` — use them to prove a run
-  end-to-end before wiring the product.
+- `clocknext_verify_signal` takes the same fields (`type:"outcome"` requires `runId` and
+  accepts `complete`) — use it to price each step and confirm the keys resolve before wiring
+  the product. It is a **dry run**: it never opens or closes a run, so it always reports
+  `closedRun: false` even with `complete: true`, and its `customerCost` is that step's token
+  cost — **not** `pricePerOutcome`. **A dry run cannot preview the completion charge**; read
+  `pricePerOutcome` from `clocknext_get_outcome` instead. The MCP has no record-usage tool, so
+  an actual run is only ever advanced and completed by the product's own SDK calls.
 
 So partial / abandoned runs are free; you're paid only for finished outcomes.
 
@@ -65,3 +76,8 @@ See [`plans.md`](plans.md).
 - **Forgetting `complete: true`.** Without it a run never bills — it stays open and free.
 - **Non-unique step names / agent keys** within one outcome — each must be unique, and every
   `agentKey` must also be unique across the organization.
+- **Forgetting the outcome's own `agentKey`**, or reusing a step's key for it. Both are
+  required, both are org-wide unique, and they are not interchangeable.
+- **Dropping `agentKey` on `clocknext_update_outcome`.** Update is a full rewrite, so pass
+  the existing outcome key back (read it with `clocknext_get_outcome`) unless you truly mean
+  to change the outcome's identity.

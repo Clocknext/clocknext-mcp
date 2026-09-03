@@ -48,7 +48,7 @@ There is **no test suite and no linter** — `npm run typecheck` is the only sta
 - **Inputs are Zod `ZodRawShape`s** (flat objects, as MCP requires). Push validation into the schema (`.refine`, `.enum`, `.min`) where possible. Cross-field rules that can't be expressed flatly are enforced in the handler and returned as an `errorResult` (e.g. `buildSignal` requiring `agentKey` for credit/outcome).
 - **Descriptions are load-bearing.** Tool and field `describe()` text is the agent's only guidance — it encodes rules (idempotency, "records for real vs dry run", "full rewrite not a patch", "prefer the dashboard"). Keep them precise and current when behavior changes.
 - **Annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) are set intentionally per tool — mirror the neighbours when adding one.
-- **Usage signals** share `signalShape` + `buildSignal` (`src/tools/signal.ts`) between `verify_signal` (dry run, prices nothing) and `record_usage` (bills for real). Keep them in lockstep.
+- **Usage signals are dry-run only.** `signalShape` + `buildSignal` (`src/tools/signal.ts`) back `verify_signal`, which prices and validates but records nothing. There is deliberately **no record/track tool**: `POST /api/v1/usage` is asynchronous (`202 {queued, messageId}` — no usage log, no validation of `agentKey` until the worker picks it up), so an MCP tool could only ever report "accepted", never "billed". Real signals are fired by the product's own code through `@clocknext/sdk`, and `get_customer_usage` is what proves one landed. Don't re-add a record tool without fixing that asymmetry first.
 
 ### Domain model (needed to touch catalogue/pricing code)
 
