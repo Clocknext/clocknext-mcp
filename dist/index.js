@@ -21365,7 +21365,7 @@ function computeBackoff(attempt, opts, retryAfterMs, rand = Math.random) {
 function sleep(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
 }
-var SDK_VERSION = "0.10.0";
+var SDK_VERSION = "0.11.0";
 var Transport = class {
   constructor(cfg) {
     this.cfg = cfg;
@@ -22079,28 +22079,6 @@ var Signals = class {
       usageLog: res.usageLog ?? null,
       ...handles(res)
     };
-  }
-  /**
-   * Validate + price a signal WITHOUT recording it (server `dryRun`). Returns
-   * the projected usage log so an integration can preflight before sending real
-   * traffic — no inbox row, wallet / outcome writes, or webhooks fire.
-   *
-   * Only the model-priced kinds support this. A dry run is not offered for unit
-   * reports or composite completions, and the server REJECTS the flag on those
-   * routes rather than accepting and ignoring it — which is why there is no
-   * dry-run path through `unit()` or `completeComposite()`.
-   */
-  async verify(signal) {
-    const body = signalToWire(signal);
-    body.dryRun = true;
-    const res = await this.transport.request({
-      method: "POST",
-      path: SIGNAL_PATHS[signal.type],
-      body,
-      // A dry run writes nothing, so it is always safe to retry.
-      retry: true
-    });
-    return res.usageLog ?? null;
   }
   /** Meter a named credit. `POST /api/v1/signal/credit`. */
   credit(input, opts) {
@@ -23594,7 +23572,7 @@ function registerWriteEnv(server) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.10.0" });
+  const server = new McpServer({ name: "clocknext", version: "0.10.1" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerSearchDocs(server);
