@@ -12,12 +12,26 @@
 #   1. bump the version in package.json, server.json (both "version" fields),
 #      src/index.ts and .claude-plugin/plugin.json; rebuild; commit.
 #   2. git tag vX.Y.Z && git push origin vX.Y.Z   → this workflow does the rest.
+#
+# The workflow is re-runnable. `npm publish` is skipped when the version is
+# already on npm, and the registry step waits for npm to actually serve the new
+# version first (npm publishes asynchronously — "may take a few minutes to
+# become available" — and the registry validates against npm's public API, so
+# registering straight after publishing 404s). If a run still fails late, use
+# Actions → Publish → Run workflow rather than bumping the version to retry.
 
 name: Publish (npm + MCP Registry)
 
 on:
   push:
     tags: ["v*"]
+  # Manual re-run, for when a later step fails after npm already published.
+  # Without this the only way to retry was to bump the version and re-tag.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish/register (e.g. 0.10.0). Defaults to package.json."
+        required: false
 
 jobs:
   publish:
@@ -36,14 +50,18 @@ jobs:
           node-version: "lts/*"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Verify tag matches package.json version
+      - name: Resolve and verify the version
+        id: ver
         run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
           PKG="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "::error::tag v$TAG does not match package.json version $PKG — bump all version files before tagging."
-            exit 1
+          if [ "${GITHUB_REF}" != "${GITHUB_REF#refs/tags/v}" ]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            if [ "$TAG" != "$PKG" ]; then
+              echo "::error::tag v$TAG does not match package.json version $PKG — bump all version files before tagging."
+              exit 1
+            fi
           fi
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
           echo "Releasing $PKG"
 
       - name: Install dependencies
@@ -61,10 +79,38 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/v}"
           jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp && mv server.tmp server.json
 
+      # Skipped when the version is already on npm, so a re-run after a failure
+      # in a LATER step doesn't die here on "cannot publish over an existing
+      # version" — which is exactly what blocked recovering the 0.9.0 release.
       - name: Publish to npm (with provenance)
-        run: npm publish --provenance --access public
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          if npm view "@clocknext/mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "@clocknext/mcp@$VERSION is already on npm — skipping publish."
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # npm answers "your package is being processed and may take a few minutes
+      # to become available", and the MCP Registry validates the version by
+      # querying npm — so registering immediately after publishing 404s. That
+      # is what failed the 0.9.0 release. Wait for npm to actually serve it.
+      - name: Wait for npm to serve the new version
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          for i in $(seq 1 60); do
+            if curl -fsS "https://registry.npmjs.org/@clocknext/mcp" \
+                 | jq -e --arg v "$VERSION" '.versions | has($v)' >/dev/null; then
+              echo "npm is serving $VERSION (after $((i*10))s)"
+              exit 0
+            fi
+            echo "not yet visible on npm; retrying in 10s ($i/60)"
+            sleep 10
+          done
+          echo "::error::npm did not serve $VERSION within 10 minutes. The npm publish succeeded — re-run this workflow (Actions → Publish → Run workflow) to register it."
+          exit 1
 
       - name: Install mcp-publisher
         run: |
