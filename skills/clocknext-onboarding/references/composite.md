@@ -106,14 +106,11 @@ Composites group entitlement traffic; raw wallet spend is metered as money, not 
 The server accepts a tag on a wallet signal and **ignores** it, so passing one implies a
 rollup that will never exist.
 
-## Preflight it
-`clocknext_verify_signal` takes `compositeRef` + `compositeValue`, so you can confirm the tag
-resolves before wiring real traffic. Send **both or neither** — half a tag is rejected rather
-than silently dropped.
-
-Check the refId with `clocknext_list_composites` first. A tag naming no live composite is
-**silently ignored, not rejected** — the signal bills normally and the rollup just never
-happens, so a typo reads exactly like success.
+## Check the refId before you wire it
+Read the composite back with `clocknext_list_composites` and copy the `refId` from there.
+This matters more than it looks: a tag naming no live composite is **silently ignored, not
+rejected** — the signal bills normally and the rollup just never happens, so a typo reads
+exactly like success and nothing anywhere reports it.
 
 ## Gotchas
 - **Created but not on a plan → bills nothing, silently.** The most common failure.

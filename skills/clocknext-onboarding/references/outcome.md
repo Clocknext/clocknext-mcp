@@ -56,13 +56,9 @@ signals.outcome({ customerId, model, agentKey: "<step key>", tokens, runId, comp
 - Signals with `complete: false` are **attached to the run but cost nothing**.
 - The signal carrying **`complete: true` closes the run and bills exactly `pricePerOutcome` once.**
 - A duplicate `complete: true` is **idempotent** — no second charge.
-- `clocknext_verify_signal` takes the same fields (`type:"outcome"` requires `runId` and
-  accepts `complete`) — use it to price each step and confirm the keys resolve before wiring
-  the product. It is a **dry run**: it never opens or closes a run, so it always reports
-  `closedRun: false` even with `complete: true`, and its `customerCost` is that step's token
-  cost — **not** `pricePerOutcome`. **A dry run cannot preview the completion charge**; read
-  `pricePerOutcome` from `clocknext_get_outcome` instead. The MCP has no record-usage tool, so
-  an actual run is only ever advanced and completed by the product's own SDK calls.
+- The completion charge is `pricePerOutcome`, which you can read from
+  `clocknext_get_outcome`. There is no MCP tool that previews what a run will cost — a run
+  is only ever opened, advanced and completed by the product's own SDK calls.
 
 So partial / abandoned runs are free; you're paid only for finished outcomes.
 

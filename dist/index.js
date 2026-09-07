@@ -22447,7 +22447,7 @@ function registerAddModel(server, cnk) {
     {
       title: "ClockNext: add (enable) a model",
       description: [
-        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_verify_signal and in the signals your product code sends, and it appears in clocknext_list_models. Autopriced from ClockNext's catalog \u2014 you never set prices here.",
+        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in the signals your product code sends, and it appears in clocknext_list_models. Autopriced from ClockNext's catalog \u2014 you never set prices here.",
         "",
         "Rules:",
         "- Only models in ClockNext's pricing catalog can be added. clocknext_list_models shows what is ALREADY enabled; the addable catalog itself is browsable on the Models page. If the add fails, the model or provider isn't in the catalog.",
@@ -23470,109 +23470,6 @@ function registerSearchDocs(server) {
   );
 }
 
-// src/tools/signal.ts
-var signalShape = {
-  type: external_exports.enum(["wallet", "credit", "outcome"]).describe(
-    "Which meter to record against: 'wallet' debits USD at the model's cost; 'credit' draws down a named credit; 'outcome' advances one step of a run (set complete:true on the last step to bill it)."
-  ),
-  customerId: external_exports.string().min(1).describe("The ClockNext customer id (e.g. cus_\u2026) this usage belongs to."),
-  model: external_exports.string().min(1).describe(
-    "Catalog model id (e.g. 'gpt-4o'), matched case-insensitively. Use clocknext_list_models to see valid ids."
-  ),
-  inputTokens: external_exports.number().int().min(0).describe("Prompt tokens for this call."),
-  outputTokens: external_exports.number().int().min(0).describe("Completion tokens for this call."),
-  cacheTokens: external_exports.number().int().min(0).optional().describe("Cached (prompt-cache) tokens; defaults to 0 when omitted."),
-  agentKey: external_exports.string().optional().describe(
-    "Required for type 'credit' (the credit's agent key) or 'outcome' (the outcome step's agent key). Ignored for 'wallet'."
-  ),
-  member: external_exports.string().optional().describe("Optional customer-member email to attribute the usage to."),
-  runId: external_exports.string().optional().describe(
-    "REQUIRED for type 'outcome' (ignored otherwise): your stable id for ONE deliverable run, unique per organisation. Every step signal of the same run sends the same runId."
-  ),
-  compositeRef: external_exports.string().optional().describe(
-    "Optional: the refId of a composite this signal belongs to (see clocknext_list_composites). A composite bundles several credits/outcomes/units and is billed as ONE thing when a plan sells it. Requires compositeValue too \u2014 send neither or both."
-  ),
-  compositeValue: external_exports.string().optional().describe(
-    "Optional: your correlation id for ONE occurrence of the composite (a session, a call, a job). Every signal sharing this value belongs to the same occurrence. Requires compositeRef too."
-  ),
-  complete: external_exports.boolean().optional().describe(
-    "Outcome only: set true on the LAST step's signal to declare the run finished \u2014 that is what bills the outcome (completion is declared by you, never inferred from step counts). Replaying a completed run bills nothing. NOTE: on a dry run this flag changes nothing you can observe \u2014 a dry run opens and closes no run, so it always reports closedRun:false and prices only THIS step's tokens, never the outcome's pricePerOutcome. Use it to confirm the step key and customer resolve; read pricePerOutcome from clocknext_get_outcome for the completion charge."
-  )
-};
-function buildSignal(a) {
-  const tokens = {
-    input: a.inputTokens,
-    output: a.outputTokens,
-    ...a.cacheTokens != null ? { cache: a.cacheTokens } : {}
-  };
-  const common = {
-    customerId: a.customerId,
-    model: a.model,
-    tokens,
-    ...a.member ? { member: a.member } : {}
-  };
-  if (Boolean(a.compositeRef) !== Boolean(a.compositeValue)) {
-    return {
-      error: "compositeRef and compositeValue go together \u2014 send both (the composite's refId and your correlation value for one occurrence) or neither."
-    };
-  }
-  const composite = a.compositeRef && a.compositeValue ? { composite: { ref: a.compositeRef, value: a.compositeValue } } : {};
-  if (a.type === "wallet") {
-    if (a.compositeRef) {
-      return {
-        error: "A wallet signal cannot belong to a composite \u2014 composites group entitlement traffic, and wallet spend is metered as money. Drop compositeRef/compositeValue, or meter this against a credit instead."
-      };
-    }
-    return { type: "wallet", ...common };
-  }
-  if (!a.agentKey) {
-    return { error: `agentKey is required for a '${a.type}' signal.` };
-  }
-  if (a.type === "outcome") {
-    if (!a.runId) {
-      return { error: "runId is required for an 'outcome' signal \u2014 it groups the step signals of one deliverable run." };
-    }
-    return {
-      type: "outcome",
-      ...common,
-      ...composite,
-      agentKey: a.agentKey,
-      runId: a.runId,
-      ...a.complete != null ? { complete: a.complete } : {}
-    };
-  }
-  return { type: a.type, ...common, ...composite, agentKey: a.agentKey };
-}
-
-// src/tools/verify-signal.ts
-function registerVerifySignal(server, cnk) {
-  server.registerTool(
-    "clocknext_verify_signal",
-    {
-      title: "ClockNext: verify signal (dry run)",
-      description: [
-        "Validate and PRICE a usage signal WITHOUT recording it \u2014 a dry run. Returns the projected usage log (cost, credits drawn, applied rules; may be null when the server computes no log) so you can confirm the customer, model, and plan are wired up correctly before sending real traffic. Records nothing and never bills.",
-        "",
-        "Rules:",
-        "- This is the ONLY signal tool. The MCP prices usage but never bills it; real signals come from the product's own code via @clocknext/sdk, and clocknext_get_customer_usage is what proves one landed.",
-        "- For type 'outcome' it prices THIS STEP's tokens only. A dry run opens and closes no run, so `complete: true` is not reflected (closedRun stays false) and the outcome's own pricePerOutcome never appears \u2014 read that from clocknext_get_outcome."
-      ].join("\n"),
-      inputSchema: signalShape,
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      const signal = buildSignal(args);
-      if ("error" in signal) return errorResult(signal.error);
-      try {
-        const usageLog = await cnk.signals.verify(signal);
-        return jsonResult({ dryRun: true, usageLog });
-      } catch (err) {
-        return errorResult(errMsg(err));
-      }
-    }
-  );
-}
-
 // src/tools/whoami.ts
 function registerWhoami(server, cnk) {
   server.registerTool(
@@ -23697,10 +23594,9 @@ function registerWriteEnv(server) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.9.0" });
+  const server = new McpServer({ name: "clocknext", version: "0.10.0" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
-  registerVerifySignal(server, cnk);
   registerSearchDocs(server);
   registerGetDoc(server);
   registerCatalogueTools(server, cnk);

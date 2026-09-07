@@ -243,7 +243,6 @@ No manual config, no env vars, nothing to build.
 | `clocknext_whoami` | Identify the org behind the key and whether it's **sandbox** or **live**. Call first. |
 | `clocknext_list_models` | List enabled models + USD prices per 1M tokens. Use a `modelId` in signals. |
 | `clocknext_add_model` | Enable a catalog model (autopriced); warns if it has no catalog price. |
-| `clocknext_verify_signal` | **Dry run** — validate + price a signal without recording it. Preflight your setup. |
 | `clocknext_get_customer_usage` | Read back a customer's recent usage logs — confirm a signal landed. |
 | `clocknext_get_customer_balances` | A customer's current wallet / credit / outcome / unit balances. |
 | `clocknext_get_customer_plan` | A customer's current active plan (from their purchase). |
@@ -253,16 +252,17 @@ Plus catalogue CRUD (`create_plan` / `create_credit` / `create_outcome` /
 `bulk_import_customers`), and the docs tools (`search_docs`, `get_doc`). Run
 `/mcp` to see the full list.
 
-A typical agent flow: `whoami` → `list_models` → `verify_signal` (confirm the
-customer/model/plan price correctly) → run the product's own code so it fires a
-real signal through `@clocknext/sdk` → `get_customer_usage` (confirm it landed).
-The `clocknext-onboarding` skill orchestrates all of this.
+A typical agent flow: `whoami` → `list_models` → `get_customer_plan` (confirm
+the plan, and that every model and agent key the code will send resolves) → run
+the product's own code so it fires a real signal through `@clocknext/sdk` →
+`get_customer_usage` (confirm it landed). The `clocknext-onboarding` skill
+orchestrates all of this.
 
-**The MCP prices usage but never bills it.** There is no record/track tool by
-design: real signals come from your product's code via the SDK
-(`signals.credit` / `.wallet` / `.outcome`), which is also the only thing that
-proves the integration end-to-end. `verify_signal` is the dry run;
-`get_customer_usage` is the proof.
+**The MCP configures billing but never meters it.** There is no record/track
+tool by design, and no preview either: real signals come from your product's
+code via the SDK (`signals.credit` / `.wallet` / `.outcome`), which is also the
+only thing that proves the integration end-to-end. `get_customer_usage` is the
+proof one landed.
 
 ## Development
 

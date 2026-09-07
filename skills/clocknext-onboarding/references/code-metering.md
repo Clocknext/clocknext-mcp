@@ -79,7 +79,6 @@ closes its run and the occurrence together. Details: `references/composite.md`.
   ingestion is durable, so the server normally answers `202` and `usageLog` is `null` —
   `res.queued` tells you which answer you got. To read a balance directly, use
   `cnk.customers.balances(id)`. This is the ONLY reason to block on a send.
-- **Preflight** before real traffic → `cnk.signals.verify(signal)` (dry run, records nothing).
 - **At-least-once** (queues/your own retries) → pass your own stable `idempotencyKey`.
   The key must identify the logical billable event (for example, a durable request or job
   id), not a fresh attempt number. Reuse the same key on every retry so an application retry

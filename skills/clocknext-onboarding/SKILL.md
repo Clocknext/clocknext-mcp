@@ -119,7 +119,7 @@ Authorization rules (MUST):
   Permission modes silence tool prompts — **never decisions**. All of this applies
   identically when the harness runs you unattended.
 - **Never two state-changing (write) actions in one turn.** Read-only work — codebase
-  scans, `list_*` calls, docs reads, dry runs, read-back verification of a write you just
+  scans, `list_*` calls, docs reads, read-back verification of a write you just
   made — may happen inside ANNOUNCE/REPORT, but a write always ends the turn's EXECUTE.
 - **Use the harness's native question/options tool whenever one is available.** This is
   mandatory for every decision state and setup-method choice (for example, use
@@ -170,7 +170,7 @@ Authorization rules (MUST):
 | S24 | ⚙ PREPARE_ENV_FILES | After explicit approval, add only the `.env.example` placeholder and verify `.env` is gitignored. |
 | S25 | ⏸ CHOOSE_SERVER_ENV_METHOD | Ask one question: How would you like to add the server key: Manually in the Clocknext by copying it into the project's `.env`, or Set it up using AI with `clocknext_write_env`? |
 | S26 | ⚙ SERVER_ENV_SETUP | Execute exactly the approved key-injection method. |
-| S27 | ⚙ DRY_RUN | `get_customer_plan` preflight + `clocknext_verify_signal`. Prices, bills nothing. |
+| S27 | ⚙ PREFLIGHT | Read-only wiring check: plan, model enabled, every agentKey resolves, balance available. Reads only, bills nothing. |
 | S28 | ⛔ MONEY_GATE_2 | The real-signal question, asked ALONE. Gate 1 did NOT cover this. |
 | S29 | ⚙ REAL_SIGNAL | Fire exactly one approved real signal. |
 | S30 | ⚙ VERIFY_USAGE_AND_BALANCE | Read back usage and balances where applicable; prove credit/outcome/wallet logs and Unit event counts landed. |
@@ -388,19 +388,36 @@ never enters your context either way; the tool refuses non-gitignored files). S2
 authorizes only the named key-injection operation in S26. S26 performs exactly that method
 and no `.env.example` or gitignore write; those were completed in S24.
 
-### S27 · Dry run
-`clocknext_get_customer_plan` to confirm the customer is on the expected plan, then
-`clocknext_verify_signal` with the *exact* signal the code will send — it prices without
-recording, so a mis-wire is caught with zero billing risk. Report the projected cost.
-Ask whether the user wants to enter the real-signal money gate next. Fix mismatches and
-re-run the dry run before ever reaching S28.
+### S27 · Preflight
+Confirm the wiring with READ-ONLY tools before any money moves. Nothing here records or
+bills:
+
+1. `clocknext_get_customer_plan` — the customer is on the plan you expect.
+2. `clocknext_list_models` — every model the code will send is enabled (an unknown
+   `modelId` is the most common mis-wire).
+3. `clocknext_get_credit` / `get_outcome` / `get_unit` — every `agentKey` the code will
+   send actually resolves, and is sold on that plan. An `agentKey` matching nothing is
+   the second most common mis-wire, and ingest will not tell you: the route answers
+   `202` and the worker drops it later.
+4. `clocknext_get_customer_balances` — there is allowance to draw against.
+
+Report what you checked and what the first real signal is expected to cost, derived from
+the catalogue prices you just read.
+
+**Be honest about the limit of this check.** It confirms every *reference* resolves; it
+does NOT price the exact signal, so it cannot prove the computed cost. The MCP has no
+tool that prices a signal — the first thing that validates the full path is the real
+signal in S29. Say so rather than implying the preflight is a guarantee.
+
+Fix any mismatch here and re-run this state before ever reaching S28.
 
 ### S28 · ⛔ MONEY_GATE_2 — the real-signal gate, asked ALONE
 Refresh the customer plan and relevant balance state read-only before displaying this gate.
 Do not send a signal during the refresh.
 Ask only this, nothing else in the dialog:
 
-> *"The dry run succeeded. The next signal is real — it will actually draw down the
+> *"The wiring checks out — the plan, model and agent keys all resolve. Nothing has
+> been priced yet: this next signal is the real one, and it will actually draw down the
 > customer's balance. Fire the real signal?"*
 
 STOP. **The purchase yes did NOT cover this.** No earlier approval, blanket yes, or auto
@@ -433,7 +450,7 @@ reconcile the dashboard result in a new turn before entering S32.
 ### S32 · Real onboarding
 Ask only: "Wire real customer onboarding now?" The answer authorizes only the decision to
 start that process. If yes, enter a new design state in the next turn; do not add a schema
-column, create customers, backfill, meter, dry-run, or fire a signal in S32. Each of those
+column, create customers, backfill, meter, preflight, or fire a signal in S32. Each of those
 actions needs its own announced state, one question, and authorization; real usage still
 requires Gate 2.
 
@@ -520,9 +537,9 @@ enable the next approved model, **text-embedding-3-small**, using AI?" ⏸
 > **You (S17, alone):** "The next step creates the customer and subscription. On a LIVE
 > organization this raises a real $X invoice. Proceed?" ⏸
 > **User:** "Yes."
-> → *customer turn, purchase turn, mapping, code, env, dry run — each its own turn* →
-> **You (S28, alone):** "The dry run succeeded, and the signal has the expected price for
-> the selected plan. The next signal is real: it will actually draw down the customer's balance.
+> → *customer turn, purchase turn, mapping, code, env, preflight — each its own turn* →
+> **You (S28, alone):** "The wiring checks out and the catalogue price for the selected
+> plan is $X. The next signal is real: it will actually draw down the customer's balance.
 > Fire the real signal?" ⏸
 > **User:** "Yes."
 > → *fire ONE signal, read back, report proof.*

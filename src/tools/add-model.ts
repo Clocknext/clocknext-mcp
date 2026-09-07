@@ -25,7 +25,7 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
     {
       title: "ClockNext: add (enable) a model",
       description: [
-        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in clocknext_verify_signal and in the signals your product code sends, and it appears in clocknext_list_models. Autopriced from ClockNext's catalog — you never set prices here.",
+        "Enable a model for the organisation so usage can be metered against it. Afterwards its `modelId` is valid in the signals your product code sends, and it appears in clocknext_list_models. Autopriced from ClockNext's catalog — you never set prices here.",
         "",
         "Rules:",
         "- Only models in ClockNext's pricing catalog can be added. clocknext_list_models shows what is ALREADY enabled; the addable catalog itself is browsable on the Models page. If the add fails, the model or provider isn't in the catalog.",
