@@ -51,6 +51,18 @@ export const signalShape = {
     .describe(
       "REQUIRED for type 'outcome' (ignored otherwise): your stable id for ONE deliverable run, unique per organisation. Every step signal of the same run sends the same runId.",
     ),
+  compositeRef: z
+    .string()
+    .optional()
+    .describe(
+      "Optional: the refId of a composite this signal belongs to (see clocknext_list_composites). A composite bundles several credits/outcomes/units and is billed as ONE thing when a plan sells it. Requires compositeValue too — send neither or both.",
+    ),
+  compositeValue: z
+    .string()
+    .optional()
+    .describe(
+      "Optional: your correlation id for ONE occurrence of the composite (a session, a call, a job). Every signal sharing this value belongs to the same occurrence. Requires compositeRef too.",
+    ),
   complete: z
     .boolean()
     .optional()
@@ -71,6 +83,8 @@ export interface SignalArgs {
   member?: string;
   runId?: string;
   complete?: boolean;
+  compositeRef?: string;
+  compositeValue?: string;
 }
 
 /** Map tool args to an SDK `Signal`, or return a validation error message. */
@@ -86,7 +100,34 @@ export function buildSignal(a: SignalArgs): Signal | { error: string } {
     tokens,
     ...(a.member ? { member: a.member } : {}),
   };
-  if (a.type === "wallet") return { type: "wallet", ...common };
+
+  // The tag is one thing in two arguments, because an MCP tool's input has to
+  // be flat. Half of it is always a mistake, and a SILENT one — the SDK would
+  // simply not send the tag, and a dry run that ignored the composite reads
+  // exactly like one that honoured it. So it is refused rather than dropped.
+  if (Boolean(a.compositeRef) !== Boolean(a.compositeValue)) {
+    return {
+      error:
+        "compositeRef and compositeValue go together — send both (the composite's refId and your correlation value for one occurrence) or neither.",
+    };
+  }
+  const composite =
+    a.compositeRef && a.compositeValue
+      ? { composite: { ref: a.compositeRef, value: a.compositeValue } }
+      : {};
+
+  // A wallet signal takes no composite: composites group entitlement traffic,
+  // and raw wallet spend is not entitlement traffic. The server accepts and
+  // IGNORES one, so passing it here would imply a rollup that never exists.
+  if (a.type === "wallet") {
+    if (a.compositeRef) {
+      return {
+        error:
+          "A wallet signal cannot belong to a composite — composites group entitlement traffic, and wallet spend is metered as money. Drop compositeRef/compositeValue, or meter this against a credit instead.",
+      };
+    }
+    return { type: "wallet", ...common };
+  }
   if (!a.agentKey) {
     return { error: `agentKey is required for a '${a.type}' signal.` };
   }
@@ -97,10 +138,11 @@ export function buildSignal(a: SignalArgs): Signal | { error: string } {
     return {
       type: "outcome",
       ...common,
+      ...composite,
       agentKey: a.agentKey,
       runId: a.runId,
       ...(a.complete != null ? { complete: a.complete } : {}),
     };
   }
-  return { type: a.type, ...common, agentKey: a.agentKey };
+  return { type: a.type, ...common, ...composite, agentKey: a.agentKey };
 }

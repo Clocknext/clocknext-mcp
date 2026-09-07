@@ -50,6 +50,8 @@ Billing is **declared, never inferred**. At runtime the product advances steps b
 `agentKey`, tying them to one workflow **run**, and marks the final signal complete:
 ```ts
 signals.outcome({ customerId, model, agentKey: "<step key>", tokens, runId, complete })  // SDK
+// or POST /api/v1/signal/outcome  { customerId, agentKey, runId, complete?,
+//                                   usage: { model, inputTokens, outputTokens, cacheTokens } }  (REST)
 ```
 - Signals with `complete: false` are **attached to the run but cost nothing**.
 - The signal carrying **`complete: true` closes the run and bills exactly `pricePerOutcome` once.**

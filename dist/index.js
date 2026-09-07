@@ -21262,7 +21262,8 @@ var Flusher = class {
     try {
       await this.transport.request({
         method: "POST",
-        path: "/api/v1/usage",
+        // Per-item, not per-Flusher: one route per meter. See `QueuedSignal`.
+        path: item.path,
         body: item.body,
         // Best-effort metering opts into retries on transient failures.
         retry: true
@@ -21364,7 +21365,7 @@ function computeBackoff(attempt, opts, retryAfterMs, rand = Math.random) {
 function sleep(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
 }
-var SDK_VERSION = "0.8.0";
+var SDK_VERSION = "0.10.0";
 var Transport = class {
   constructor(cfg) {
     this.cfg = cfg;
@@ -21456,6 +21457,34 @@ var Transport = class {
       if (qs) url += `?${qs}`;
     }
     return url;
+  }
+};
+var Composites = class {
+  constructor(transport) {
+    this.transport = transport;
+  }
+  transport;
+  /** List composites. Pass `{ active: true }` for only the ones a signal can
+   *  still be tagged with — the default list INCLUDES archived ones, which
+   *  keep every row they already own. */
+  async list(params = {}) {
+    const res = await this.transport.request({
+      method: "GET",
+      path: "/api/v1/composites",
+      query: {
+        active: params.active === void 0 ? void 0 : String(params.active)
+      }
+    });
+    return res.composites;
+  }
+  /** Create a composite. `POST /api/v1/composites`. */
+  async create(input) {
+    const res = await this.transport.request({
+      method: "POST",
+      path: "/api/v1/composites",
+      body: input
+    });
+    return res.composite;
   }
 };
 var Credits = class {
@@ -21637,7 +21666,7 @@ var Customers = class {
     });
     return res.members;
   }
-  /** Add a member to a customer. Duplicate `employeeId` → ConflictError. */
+  /** Add a member to a customer. Duplicate `email` → ConflictError. */
   async addMember(id, input) {
     const res = await this.transport.request({
       method: "POST",
@@ -21646,7 +21675,7 @@ var Customers = class {
     });
     return res.member;
   }
-  /** Update a member's profile (role is fixed). `PATCH …/:id/members/:memberId`. */
+  /** Update a member's profile. Duplicate `email` → ConflictError. `PATCH …/:id/members/:memberId`. */
   async updateMember(id, memberId, input) {
     const res = await this.transport.request({
       method: "PATCH",
@@ -21655,12 +21684,13 @@ var Customers = class {
     });
     return res.member;
   }
-  /** Remove a member from a customer. `DELETE …/:id/members/:memberId`. */
+  /** Remove a member from a customer, returning who was removed. `DELETE …/:id/members/:memberId`. */
   async removeMember(id, memberId) {
-    await this.transport.request({
+    const res = await this.transport.request({
       method: "DELETE",
       path: `/api/v1/customers/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`
     });
+    return res.member;
   }
   // --- Wallet & billing config --------------------------------------------
   /** The customer's wallet balance + transactions. `GET …/:id/wallet`. */
@@ -21970,18 +22000,28 @@ function newKey() {
     return v.toString(16);
   });
 }
+var SIGNAL_PATHS = {
+  credit: "/api/v1/signal/credit",
+  outcome: "/api/v1/signal/outcome",
+  wallet: "/api/v1/signal/wallet"
+};
+var UNIT_PATH = "/api/v1/signal/unit";
+var COMPOSITE_COMPLETE_PATH = "/api/v1/signal/composite/complete";
 function signalToWire(signal) {
+  const t = signal.tokens;
   const body = {
     customerId: signal.customerId,
-    type: signal.type,
-    model: signal.model
+    // `usage` is required on all three model-priced kinds. input/output are
+    // always sent; `cacheTokens` only when provided (the server defaults 0).
+    usage: {
+      model: signal.model,
+      inputTokens: t.input,
+      outputTokens: t.output,
+      ...t.cache != null ? { cacheTokens: t.cache } : {}
+    }
   };
   if (signal.member) body.member = signal.member;
   if (signal.custom) body.custom = signal.custom;
-  const t = signal.tokens;
-  body.inputTokens = t.input;
-  body.outputTokens = t.output;
-  if (t.cache != null) body.cacheTokens = t.cache;
   if (signal.type === "credit" || signal.type === "outcome") {
     body.agentKey = signal.agentKey;
   }
@@ -21989,11 +22029,17 @@ function signalToWire(signal) {
     body.runId = signal.runId;
     if (signal.complete != null) body.complete = signal.complete;
   }
-  if (signal.type !== "wallet" && signal.metric) {
-    body[signal.metric.ref] = signal.metric.value;
+  if (signal.type !== "wallet" && signal.composite) {
+    body.composite = { [signal.composite.ref]: signal.composite.value };
   }
   if (signal.idempotencyKey) body.idempotencyKey = signal.idempotencyKey;
   return body;
+}
+function handles(res) {
+  return {
+    ...res.messageId != null ? { messageId: res.messageId } : {},
+    ...res.rawId != null ? { rawId: res.rawId } : {}
+  };
 }
 var Signals = class {
   constructor(transport, flusher, cfg) {
@@ -22005,7 +22051,8 @@ var Signals = class {
   flusher;
   cfg;
   /**
-   * Record one usage signal. `POST /api/v1/usage`.
+   * Record one usage signal, to the route its `type` selects:
+   * `POST /api/v1/signal/credit` | `/signal/outcome` | `/signal/wallet`.
    *
    * Returns as soon as the signal is buffered (async mode) or the request has
    * been answered (`{ wait: true }` / sync mode). See {@link TrackResult}: a
@@ -22014,14 +22061,15 @@ var Signals = class {
   async track(signal, opts = {}) {
     const body = signalToWire(signal);
     if (body.idempotencyKey == null) body.idempotencyKey = newKey();
+    const path = SIGNAL_PATHS[signal.type];
     const sendNow = opts.wait || this.cfg.mode === "sync";
     if (!sendNow) {
-      this.flusher.enqueue({ body, signal });
+      this.flusher.enqueue({ path, body, signal });
       return { queued: true };
     }
     const res = await this.transport.request({
       method: "POST",
-      path: "/api/v1/usage",
+      path,
       body,
       // Best-effort metering opts into retries on transient failures.
       retry: true
@@ -22029,39 +22077,52 @@ var Signals = class {
     return {
       queued: res.queued === true,
       usageLog: res.usageLog ?? null,
-      ...res.messageId != null ? { messageId: res.messageId } : {}
+      ...handles(res)
     };
   }
   /**
    * Validate + price a signal WITHOUT recording it (server `dryRun`). Returns
    * the projected usage log so an integration can preflight before sending real
    * traffic — no inbox row, wallet / outcome writes, or webhooks fire.
+   *
+   * Only the model-priced kinds support this. A dry run is not offered for unit
+   * reports or composite completions, and the server REJECTS the flag on those
+   * routes rather than accepting and ignoring it — which is why there is no
+   * dry-run path through `unit()` or `completeComposite()`.
    */
   async verify(signal) {
     const body = signalToWire(signal);
     body.dryRun = true;
     const res = await this.transport.request({
       method: "POST",
-      path: "/api/v1/usage",
+      path: SIGNAL_PATHS[signal.type],
       body,
       // A dry run writes nothing, so it is always safe to retry.
       retry: true
     });
     return res.usageLog ?? null;
   }
-  /** Meter a named credit. */
+  /** Meter a named credit. `POST /api/v1/signal/credit`. */
   credit(input, opts) {
     return this.track({ ...input, type: "credit" }, opts);
   }
-  /** Debit the customer's wallet at model cost. */
+  /** Debit the customer's wallet at model cost. `POST /api/v1/signal/wallet`. */
   wallet(input, opts) {
     return this.track({ ...input, type: "wallet" }, opts);
   }
-  /** Advance one step of an outcome workflow. */
+  /** Advance one step of an outcome workflow. `POST /api/v1/signal/outcome`. */
   outcome(input, opts) {
     return this.track({ ...input, type: "outcome" }, opts);
   }
-  /** Recent usage logs + totals for a customer. `GET /api/v1/usage`. */
+  /**
+   * Recent usage logs + totals for a customer. `GET /api/v1/usage`.
+   *
+   * Still the legacy path, deliberately. The `/api/v1/signal/*` family is
+   * POST-only — it replaced how usage is INGESTED, not how it is read — so
+   * `GET /api/v1/usage` has no successor and is not deprecated. It is also the
+   * only way to prove a signal landed, which matters more now that ingestion
+   * answers `202` for everything.
+   */
   async list(params) {
     const res = await this.transport.request({
       method: "GET",
@@ -22073,22 +22134,94 @@ var Signals = class {
   /**
    * Record one unit-metered event (a fixed-price meter with no tokens),
    * addressed to a catalog unit by its `agentKey`. Sent immediately — unit
-   * events are not buffered. `POST /api/v1/units`.
+   * events are not buffered. `POST /api/v1/signal/unit`.
+   *
+   * Two things changed with the move off `POST /api/v1/units`, and both show up
+   * in the return type. The route is now durable (the report lands in an inbox
+   * before it is priced, so a failure parks as Pending and can be retried
+   * instead of losing a billable event) and it answers `202` when it queues —
+   * so this resolves {@link UnitTrackResult}, not a bare `{ unitUsage }`.
+   * Branch on `queued`.
    */
   async unit(input) {
-    return this.transport.request({
+    const res = await this.transport.request({
       method: "POST",
-      path: "/api/v1/units",
+      path: UNIT_PATH,
       body: {
         customerId: input.customerId,
         agentKey: input.agentKey,
-        ...input.member ? { member: input.member } : {}
+        ...input.quantity != null ? { quantity: input.quantity } : {},
+        ...input.member ? { member: input.member } : {},
+        ...input.composite ? { composite: { [input.composite.ref]: input.composite.value } } : {},
+        // Assigned HERE, before the send, so the SAME key rides every
+        // transport-level retry below. Without it a single 500 followed by a
+        // success is TWO un-keyed reports, and the server dedups on the key —
+        // so it bills the allowance down twice, up to `retry.maxAttempts`
+        // times. The route gained idempotency precisely to stop that; not
+        // using it by default would leave the double-charge reachable from the
+        // client instead of the server.
+        idempotencyKey: input.idempotencyKey ?? newKey()
       },
       // Best-effort metering opts into retries on transient failures.
       retry: true
     });
+    return {
+      queued: res.queued === true,
+      unitUsage: res.unitUsage ?? null,
+      ...handles(res)
+    };
   }
-  /** A customer's unit balances + recent unit events. `GET /api/v1/units`. */
+  /**
+   * Close ONE occurrence of a composite — a distinct tag value.
+   * `POST /api/v1/signal/composite/complete`.
+   *
+   * A composite bundles several credits / outcomes / units and is billed as one
+   * thing. The occurrence opens on the first tagged signal and costs nothing;
+   * this call is the moment it is billed. Only your code knows when the
+   * workflow ended, so this is a DECLARATION, not a hint: tagged signals may
+   * arrive in any order and the occurrence stays open and unbilled until you
+   * say otherwise. Put it on the line before your own `return`.
+   *
+   * An OUTCOME never needs this — its own `complete: true` closes its run and
+   * the matching occurrence together. Credits and units have no "done" signal
+   * of their own, so this is theirs.
+   *
+   * Closing twice is safe: the second call answers `ALREADY_COMPLETED` and
+   * cannot bill again. Calling it EARLY is also safe — before every entitlement
+   * the composite is restricted to has reported, or while an ADVANCE pool is
+   * full — the server parks the ping and applies it when the blocker clears,
+   * rather than failing it.
+   */
+  async completeComposite(input) {
+    const res = await this.transport.request({
+      method: "POST",
+      path: COMPOSITE_COMPLETE_PATH,
+      body: {
+        customerId: input.customerId,
+        composite: { [input.composite.ref]: input.composite.value },
+        // Auto-assigned like the others. A retry here could not double-BILL
+        // even without it — closing a closed occurrence is a server-side
+        // no-op — but that safety comes from occurrence-level dedup, not from
+        // idempotency, and an un-keyed replay still writes a redundant inbox
+        // row. Keying it collapses the retry into the one attempt it is.
+        idempotencyKey: input.idempotencyKey ?? newKey()
+      },
+      retry: true
+    });
+    return {
+      queued: res.queued === true,
+      ...res.status != null ? { status: res.status } : {},
+      ...res.composite !== void 0 ? { composite: res.composite } : {},
+      ...res.value !== void 0 ? { value: res.value } : {},
+      ...handles(res)
+    };
+  }
+  /**
+   * A customer's unit balances + recent unit events. `GET /api/v1/units`.
+   *
+   * Legacy path for the same reason as {@link list}: the signal family is
+   * POST-only, so the read side has no successor and is not deprecated.
+   */
   unitUsage(params) {
     return this.transport.request({
       method: "GET",
@@ -22224,6 +22357,8 @@ var ClockNext = class {
   payments;
   /** Manage the credit-type catalog. */
   credits;
+  /** Manage the composite catalog — bundles billed as one thing. */
+  composites;
   /** Manage the outcome-type catalog. */
   outcomes;
   /** Manage the unit-type catalog. */
@@ -22252,6 +22387,7 @@ var ClockNext = class {
     this.invoices = new Invoices(transport);
     this.payments = new Payments(transport);
     this.credits = new Credits(transport);
+    this.composites = new Composites(transport);
     this.outcomes = new Outcomes(transport);
     this.units = new Units(transport);
     this.webhooks = new Webhooks(transport);
@@ -22886,6 +23022,99 @@ function registerCatalogueTools(server, cnk) {
   });
 }
 
+// src/tools/composites.ts
+function registerCompositeTools(server, cnk) {
+  server.registerTool(
+    "clocknext_list_composites",
+    {
+      title: "ClockNext: list composites",
+      description: [
+        "List the organisation's composites \u2014 bundles of credits / outcomes / units grouped under one tag and billed as ONE thing. Returns each composite's `refId` (what you put in a signal's compositeRef) and the catalogue items it is restricted to, with their agentKeys.",
+        "",
+        "Rules:",
+        "- Call this BEFORE tagging any signal with a composite: only a live composite's refId resolves, and a tag naming nothing is silently ignored rather than rejected \u2014 so a typo looks exactly like success.",
+        "- A composite is restricted to a set of credits/outcomes/units. Only signals naming something in that set may carry its tag. Empty lists mean unrestricted (legacy rows only).",
+        "- Pass active=true for only the ones a new signal can still be tagged with. Archived composites keep every row they already own."
+      ].join("\n"),
+      inputSchema: {
+        active: external_exports.boolean().optional().describe(
+          "Only return composites that still accept new traffic. Omit to include archived ones too."
+        )
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async ({ active }) => {
+      try {
+        return jsonResult(
+          await cnk.composites.list(active === void 0 ? {} : { active })
+        );
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "clocknext_create_composite",
+    {
+      title: "ClockNext: create composite",
+      description: [
+        "Create a composite \u2014 a bundle of credits / outcomes / units that is grouped under one tag and billed as ONE thing instead of per item. Use it when several metered steps together make up one sellable unit of work (a call, a job, a document).",
+        "",
+        "Rules:",
+        "- `refId` is the integration contract: it is what the product's code sends as a signal's compositeRef. Lowercased; letters, digits, _ and - only. It may NOT collide with a field the ingest body already owns (customerId, usage, agentKey, runId, member, custom, composite, \u2026) \u2014 a collision is refused here, not silently ignored later.",
+        "- `entitlements` is REQUIRED \u2014 at least one credit / outcome / unit id. A composite restricted to nothing would accept every signal in the organisation. Get the ids from clocknext_list_credits / clocknext_list_outcomes / clocknext_list_units (ids, not agentKeys).",
+        "- `price` is what ONE occurrence costs once a plan sells this. Creating a composite CHARGES NOBODY: an invoice is built from plan components, never from a catalogue entry.",
+        "- To actually bill it, add it to a plan as a component of type PRICING_METRIC (the wire still uses the old name) with a billingMode and, for ADVANCE, a quantity \u2014 that quantity is a prepaid pool of slots shared across the wrapped items. Tell the user this second step is required, or they will wonder why a composite they created bills nothing.",
+        "- There is no update or archive for composites on the public API yet \u2014 those are dashboard-only. Confirm the name and refId with the user before creating, because you cannot fix either from here."
+      ].join("\n"),
+      inputSchema: {
+        name: external_exports.string().min(1).max(80).describe("Human-readable name, e.g. 'Voice AI call'."),
+        refId: external_exports.string().min(1).max(80).describe(
+          "The tag identifier the product's code will send (e.g. 'voice_ai'). Lowercased; letters, digits, _ and - only; must not collide with a reserved ingest field."
+        ),
+        price: external_exports.number().min(0).describe(
+          "USD charged per completed occurrence once a plan sells this composite. Ask the user \u2014 do not invent a price."
+        ),
+        description: external_exports.string().max(400).optional().describe("Optional note about what this bundle represents."),
+        creditIds: external_exports.array(external_exports.string()).optional().describe("Credit ids to restrict this composite to (from clocknext_list_credits)."),
+        outcomeIds: external_exports.array(external_exports.string()).optional().describe("Outcome ids to restrict this composite to (from clocknext_list_outcomes)."),
+        unitIds: external_exports.array(external_exports.string()).optional().describe("Unit ids to restrict this composite to (from clocknext_list_units).")
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true
+      }
+    },
+    async ({ name, refId, price, description, creditIds, outcomeIds, unitIds }) => {
+      const total = (creditIds?.length ?? 0) + (outcomeIds?.length ?? 0) + (unitIds?.length ?? 0);
+      if (total === 0) {
+        return errorResult(
+          "A composite must wrap at least one credit, outcome or unit. Call clocknext_list_credits / clocknext_list_outcomes / clocknext_list_units and pass the ids of the items this bundle is made of."
+        );
+      }
+      try {
+        return jsonResult(
+          await cnk.composites.create({
+            name,
+            refId,
+            price,
+            ...description ? { description } : {},
+            entitlements: {
+              ...creditIds?.length ? { creditIds } : {},
+              ...outcomeIds?.length ? { outcomeIds } : {},
+              ...unitIds?.length ? { unitIds } : {}
+            }
+          })
+        );
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    }
+  );
+}
+
 // src/tools/customers.ts
 var customerFields = {
   name: external_exports.string().min(1).describe("Customer / company name."),
@@ -23260,6 +23489,12 @@ var signalShape = {
   runId: external_exports.string().optional().describe(
     "REQUIRED for type 'outcome' (ignored otherwise): your stable id for ONE deliverable run, unique per organisation. Every step signal of the same run sends the same runId."
   ),
+  compositeRef: external_exports.string().optional().describe(
+    "Optional: the refId of a composite this signal belongs to (see clocknext_list_composites). A composite bundles several credits/outcomes/units and is billed as ONE thing when a plan sells it. Requires compositeValue too \u2014 send neither or both."
+  ),
+  compositeValue: external_exports.string().optional().describe(
+    "Optional: your correlation id for ONE occurrence of the composite (a session, a call, a job). Every signal sharing this value belongs to the same occurrence. Requires compositeRef too."
+  ),
   complete: external_exports.boolean().optional().describe(
     "Outcome only: set true on the LAST step's signal to declare the run finished \u2014 that is what bills the outcome (completion is declared by you, never inferred from step counts). Replaying a completed run bills nothing. NOTE: on a dry run this flag changes nothing you can observe \u2014 a dry run opens and closes no run, so it always reports closedRun:false and prices only THIS step's tokens, never the outcome's pricePerOutcome. Use it to confirm the step key and customer resolve; read pricePerOutcome from clocknext_get_outcome for the completion charge."
   )
@@ -23276,7 +23511,20 @@ function buildSignal(a) {
     tokens,
     ...a.member ? { member: a.member } : {}
   };
-  if (a.type === "wallet") return { type: "wallet", ...common };
+  if (Boolean(a.compositeRef) !== Boolean(a.compositeValue)) {
+    return {
+      error: "compositeRef and compositeValue go together \u2014 send both (the composite's refId and your correlation value for one occurrence) or neither."
+    };
+  }
+  const composite = a.compositeRef && a.compositeValue ? { composite: { ref: a.compositeRef, value: a.compositeValue } } : {};
+  if (a.type === "wallet") {
+    if (a.compositeRef) {
+      return {
+        error: "A wallet signal cannot belong to a composite \u2014 composites group entitlement traffic, and wallet spend is metered as money. Drop compositeRef/compositeValue, or meter this against a credit instead."
+      };
+    }
+    return { type: "wallet", ...common };
+  }
   if (!a.agentKey) {
     return { error: `agentKey is required for a '${a.type}' signal.` };
   }
@@ -23287,12 +23535,13 @@ function buildSignal(a) {
     return {
       type: "outcome",
       ...common,
+      ...composite,
       agentKey: a.agentKey,
       runId: a.runId,
       ...a.complete != null ? { complete: a.complete } : {}
     };
   }
-  return { type: a.type, ...common, agentKey: a.agentKey };
+  return { type: a.type, ...common, ...composite, agentKey: a.agentKey };
 }
 
 // src/tools/verify-signal.ts
@@ -23448,13 +23697,14 @@ function registerWriteEnv(server) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.8.0" });
+  const server = new McpServer({ name: "clocknext", version: "0.9.0" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerVerifySignal(server, cnk);
   registerSearchDocs(server);
   registerGetDoc(server);
   registerCatalogueTools(server, cnk);
+  registerCompositeTools(server, cnk);
   registerCustomerTools(server, cnk);
   registerAddModel(server, cnk);
   registerWriteEnv(server);

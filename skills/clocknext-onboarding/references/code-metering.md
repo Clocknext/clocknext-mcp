@@ -3,8 +3,12 @@
 ## SDK vs API (decide first, by inspecting the codebase)
 - **JS / TS codebase → `@clocknext/sdk`** — typed, with buffering, retries, and idempotency
   built in.
-- **Any other language → the REST API** — `POST /api/v1/usage` for credit / outcome / wallet
-  signals, `POST /api/v1/units` for unit events.
+- **Any other language → the REST API** — one route per meter:
+  `POST /api/v1/signal/credit`, `/signal/outcome`, `/signal/wallet` for token-priced
+  signals, `POST /api/v1/signal/unit` for unit events, and
+  `POST /api/v1/signal/composite/complete` to close a composite. The meter is the PATH,
+  not a `type` field in the body. (`POST /api/v1/usage` and `POST /api/v1/units` are the
+  deprecated predecessors — every response from them carries `Deprecation: true`.)
 Ground the exact call shapes in the docs first: call `clocknext_search_docs kind=javascript`
 for JS/TS or `kind=api` otherwise, then call `clocknext_get_doc` for the matching result.
 
@@ -54,10 +58,27 @@ export const meterSeat  = async (customerId: string, agentKey: string) => {
 
 Call them on the **server**, at the billable boundary, **after** the work succeeds.
 
+### 2b. If a composite is in play — tag every signal, then CLOSE it
+A composite bills per completed occurrence, so tagging alone charges nothing. Pass the same
+`composite` to every signal of one occurrence, and close it where the workflow ends:
+
+```ts
+const composite = { ref: "voice_ai", value: callId };   // callId = YOUR id for this occurrence
+await clocknext()?.signals.credit({ customerId, model, agentKey, tokens: t, composite });
+await clocknext()?.signals.unit({ customerId, agentKey: "minutes", quantity: 4, composite });
+await clocknext()?.signals.completeComposite({ customerId, composite }); // ← this bills it
+```
+
+The close is a **declaration** — never inferred from which signals arrived — so it belongs on
+the line before the workflow's own `return`. An OUTCOME is the exception: its `complete: true`
+closes its run and the occurrence together. Details: `references/composite.md`.
+
 ### 3. When (and only when) to deviate
-- **Gate a request on balance** (reject when out of allowance) → that call uses `{ wait: true }`
-  and reads `res.usageLog`, or catches the typed `AllowanceError`. This is the ONLY reason to
-  block on a send.
+- **Gate a request on balance** (reject when out of allowance) → that call uses
+  `{ wait: true }` and catches the typed `AllowanceError`. Do NOT gate on `res.usageLog`:
+  ingestion is durable, so the server normally answers `202` and `usageLog` is `null` —
+  `res.queued` tells you which answer you got. To read a balance directly, use
+  `cnk.customers.balances(id)`. This is the ONLY reason to block on a send.
 - **Preflight** before real traffic → `cnk.signals.verify(signal)` (dry run, records nothing).
 - **At-least-once** (queues/your own retries) → pass your own stable `idempotencyKey`.
   The key must identify the logical billable event (for example, a durable request or job
@@ -94,7 +115,8 @@ entitlement. The mapping is the user's decision, never yours:
 
 ## Units are not LLM calls
 Meter units where the *event* happens in the customer's product — `signals.unit({ agentKey })`
-(SDK) or `POST /api/v1/units` (REST). One call = one unit: no tokens, no model. This is the
+(SDK) or `POST /api/v1/signal/unit` (REST). One call = one unit unless you pass `quantity`:
+no tokens, no model. This is the
 product's runtime job, **not** the MCP's — the MCP only builds the catalogue.
 
 ## Safety

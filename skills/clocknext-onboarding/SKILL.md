@@ -253,6 +253,11 @@ pricing or explaining a type):
   `references/outcome.md`.
 - **Unit** — fixed price per *event*, no tokens (upload, export, seat); FLAT or tiered
   (SLAB vs VOLUME differ a lot). Deep: `references/unit.md`.
+- **Composite** — several of the above bundled and billed as ONE thing, per completed
+  occurrence ("$2 per call", where a call is 2 credits + 4 units). Only offer it once the
+  individual meters are settled — it is priced on top of them. Two steps, and the second is
+  the one people forget: creating a composite charges nobody, a plan has to SELL it. Deep:
+  `references/composite.md`.
 
 S8 asks which they want (recommendation vs their own choice) — one question.
 S9 **sketches before creating**: name, what it bills, the model mixer grounding (model,
@@ -436,7 +441,7 @@ requires Gate 2.
 "Meter every billable call" is about **credit / outcome / wallet** signals (token-priced).
 A **unit is a per-event meter** — one event = one unit, no tokens. Units are configured in
 the catalogue (S7–S11), but runtime unit signals fire **in the customer's product** via
-`signals.unit()` (SDK) or `POST /api/v1/units` (REST) — **never through the MCP**, which
+`signals.unit()` (SDK) or `POST /api/v1/signal/unit` (REST) — **never through the MCP**, which
 has no unit-usage recording or read tool.
 
 ## Writing style — talk like a human, not a schema

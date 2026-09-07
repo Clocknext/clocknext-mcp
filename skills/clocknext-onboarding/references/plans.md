@@ -7,7 +7,7 @@ purchase, Gate 2 = the first real signal — [SKILL.md](../SKILL.md) S17 and S28
 alone).
 
 ## Components
-Each component is one of five types, in one of two billing modes.
+Each component is one of six types, in one of two billing modes.
 
 | Type | References | ADVANCE means | ARREAR means |
 | --- | --- | --- | --- |
@@ -16,6 +16,7 @@ Each component is one of five types, in one of two billing modes.
 | **CREDIT** | `creditId` | Grant a `quantity` of [credits](credit.md) up-front. | Meter actual credit usage. |
 | **OUTCOME** | `outcomeId` | Grant a `quantity` of [outcomes](outcome.md) up-front. | Bill each completed outcome. |
 | **UNIT** | `unitId` | Prepay a `quantity` of [units](unit.md) (priced through tiers). | Meter actual unit events. |
+| **PRICING_METRIC** | `pricingMetricId` | Prepay a POOL of `quantity` [composite](composite.md) occurrences — slots shared across whichever wrapped items each occurrence uses. | Count completed occurrences at cycle end. |
 
 - **ADVANCE** = billed **up-front for the cycle**; needs `amount` (WALLET/FLAT) or `quantity`
   (CREDIT/OUTCOME/UNIT).
@@ -24,6 +25,10 @@ Each component is one of five types, in one of two billing modes.
 - CREDIT/OUTCOME/UNIT components reference an **existing** catalogue entitlement by id — **create
   those first**. WALLET and FLAT exist only here, not in the catalogue.
 - At most **one WALLET** and **one FLAT** component per plan; each credit/outcome/unit at most once.
+- **PRICING_METRIC is how a [composite](composite.md) gets billed** — the wire still uses that
+  older name for it. The composite must exist first (`clocknext_create_composite`), and
+  **without this component it charges nothing at all**: the catalogue entry only defines the
+  bundle and its price. This is the step people forget, and it fails silently.
 
 ## Create it — `clocknext_create_plan`
 

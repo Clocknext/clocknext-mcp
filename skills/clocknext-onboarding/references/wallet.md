@@ -12,7 +12,7 @@ wallet-funded metering (below).
 ## How a wallet signal debits (verified)
 ```ts
 signals.wallet({ customerId, model, tokens: { input, output, cache } })  // SDK
-// or POST /api/v1/usage  { type: "wallet", customerId, model, tokens }  (REST)
+// or POST /api/v1/signal/wallet  { customerId, usage: { model, inputTokens, outputTokens, cacheTokens } }  (REST)
 ```
     walletDebit = providedCost = (inputTokens·inputPrice + outputTokens·outputPrice + cacheTokens·cachePrice) / 1e6
 

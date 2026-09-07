@@ -62,7 +62,7 @@ So the call draws ≈ **0.025 credits** (≈ **$0.021** to the customer, ≈ $0.
 ## How it's metered at runtime (in the customer's product, not the MCP)
 ```ts
 signals.credit({ customerId, model, agentKey, tokens: { input, output, cache } })  // SDK
-// or POST /api/v1/usage  { type: "credit", customerId, model, agentKey, tokens }  (REST)
+// or POST /api/v1/signal/credit  { customerId, agentKey, usage: { model, inputTokens, outputTokens, cacheTokens } }  (REST)
 ```
 Fire it **on the server, after the call succeeds**, at the billable boundary. See
 [`code-metering.md`](code-metering.md) for the integration recipe.

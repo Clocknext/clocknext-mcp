@@ -15,13 +15,19 @@ source of truth.
 | **Credit** | catalogue entitlement | Token-metered balance, drawn down per call by real token cost (+ your margin). | [`credit.md`](credit.md) |
 | **Outcome** | catalogue entitlement | Billed once per *completed* multi-step LLM deliverable. | [`outcome.md`](outcome.md) |
 | **Unit** | catalogue entitlement | Fixed price per *event*, no tokens — FLAT / SLAB / VOLUME pricing. | [`unit.md`](unit.md) |
+| **Composite** | catalogue + plan component | Several credits/outcomes/units bundled and billed as **ONE** thing, per completed occurrence. | [`composite.md`](composite.md) |
 | **Wallet** | plan component | Prepaid USD balance. Plain wallet signals debit at **raw** model cost (no margin); when it funds metered usage (`walletFundedArrear`) it debits the **customer price — margin included**. | [`wallet.md`](wallet.md) |
 | **Flat** | plan component | A one-off fee on the plan (e.g. setup). | [`plans.md`](plans.md) |
 | **Plan** | the wrapper | Bundles the above into what a customer subscribes to and pays for. | [`plans.md`](plans.md) |
 
 **Catalogue entitlements** (credit / outcome / unit) are created and priced on their own, then
 referenced by a plan. **Wallet** and **flat** aren't catalogue objects — they exist only as
-components *inside* a plan. See [`plans.md`](plans.md) for how it all composes.
+components *inside* a plan. A **composite** is both: it is created in the catalogue like an
+entitlement, but it wraps entitlements that already exist and only bills once a plan sells it
+as a component. See [`plans.md`](plans.md) for how it all composes.
+
+Reach for a composite only **after** the individual meters are settled — it is priced on top
+of them, so there is nothing to bundle until they exist.
 
 ## Which one? — decide by how the customer's billing "sounds"
 

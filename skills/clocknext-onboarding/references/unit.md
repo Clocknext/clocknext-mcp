@@ -55,10 +55,11 @@ cheap rates; VOLUME re-prices everything at the reached tier.** Pick SLAB for "g
 pricing, VOLUME for "buy more, the whole order gets cheaper (or, above a line, pricier)."
 
 ## How it's metered at runtime — NEVER via the MCP
-A unit event is recorded **in the customer's product**, one call = one unit:
+A unit event is recorded **in the customer's product**, one call = one unit unless it passes
+`quantity`:
 ```ts
 signals.unit({ customerId, agentKey })          // SDK — no tokens, no model
-// or POST /api/v1/units  { customerId, agentKey }   (REST)
+// or POST /api/v1/signal/unit  { customerId, agentKey, quantity? }   (REST)
 ```
 The MCP builds the unit catalogue and does **not** record unit events. `signals.unit()` sends
 immediately and returns a Promise; handle failures at the product's server boundary. The MCP
