@@ -42,4 +42,4 @@ stores just the final computed price. That bundle is what makes later **re-prici
 auditing** easy. So when the user is deciding, **recommend Manually in the Clocknext for
 credits/outcomes and say that reason out loud** — but if they'd rather **Set it up using AI**, that's a
 valid, fully model-grounded result; do it cleanly and note the one tradeoff (no stored
-bundle). Don't keep pushing the dashboard after they've chosen.
+bundle). Don't keep pushing the ClockNext product after they've chosen.

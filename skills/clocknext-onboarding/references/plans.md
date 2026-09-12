@@ -19,11 +19,12 @@ Each component is one of six types, in one of two billing modes.
 | **PRICING_METRIC** | `pricingMetricId` | Prepay a POOL of `quantity` [composite](composite.md) occurrences — slots shared across whichever wrapped items each occurrence uses. | Count completed occurrences at cycle end. |
 
 - **ADVANCE** = billed **up-front for the cycle**; needs `amount` (WALLET/FLAT) or `quantity`
-  (CREDIT/OUTCOME/UNIT).
+  (CREDIT/OUTCOME/UNIT/PRICING_METRIC).
 - **ARREAR** = **metered**, billed for what was consumed (at cycle end, or from the wallet if
   [`walletFundedArrear`](wallet.md) is on).
-- CREDIT/OUTCOME/UNIT components reference an **existing** catalogue entitlement by id — **create
-  those first**. WALLET and FLAT exist only here, not in the catalogue.
+- CREDIT/OUTCOME/UNIT components reference an **existing** catalogue entitlement by id, and
+  PRICING_METRIC references an **existing** composite by `pricingMetricId` — **create those
+  first**. WALLET and FLAT exist only here, not in the catalogue.
 - At most **one WALLET** and **one FLAT** component per plan; each credit/outcome/unit at most once.
 - **PRICING_METRIC is how a [composite](composite.md) gets billed** — the wire still uses that
   older name for it. The composite must exist first (`clocknext_create_composite`), and
@@ -81,7 +82,7 @@ The ARREAR credit is then billed as consumed — separately at cycle end, or fro
 - Cross-component rules (the wallet-funded three, one-wallet/one-flat, FREE constraints) are
   enforced by the backend with a **clean 422** — the tool surfaces the message; fix and resend.
 - Changes apply **going forward**; customers already on a plan keep their terms.
-- Prefer the dashboard plan builder for anything non-trivial (live preview) — the MCP is the
+- Prefer the plan builder in the ClockNext product for anything non-trivial (live preview) — the MCP is the
   fallback. See [`ui-links.md`](ui-links.md) and [the plan states in `SKILL.md`](../SKILL.md#s13s15--plan).
 
 ## See also

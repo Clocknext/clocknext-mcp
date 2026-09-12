@@ -22551,7 +22551,9 @@ async function computeMixerBase(cnk, lines) {
   return { ok: true, basePrice };
 }
 var planComponent = external_exports.object({
-  type: external_exports.enum(["WALLET", "FLAT", "CREDIT", "OUTCOME", "UNIT"]).describe("The meter type of this entitlement line."),
+  type: external_exports.enum(["WALLET", "FLAT", "CREDIT", "OUTCOME", "UNIT", "PRICING_METRIC"]).describe(
+    "The meter type of this entitlement line. PRICING_METRIC is a COMPOSITE \u2014 the product word is 'composite' but the stored enum and the wire value are still the older name, so send PRICING_METRIC and expect it back."
+  ),
   billingMode: external_exports.enum(["ADVANCE", "ARREAR"]).describe(
     "ADVANCE bills up-front for the cycle (needs amount/quantity); ARREAR meters and bills what was consumed."
   ),
@@ -22561,8 +22563,11 @@ var planComponent = external_exports.object({
   creditId: external_exports.string().optional().describe("CREDIT only: id of an existing credit (clocknext_list_credits)."),
   outcomeId: external_exports.string().optional().describe("OUTCOME only: id of an existing outcome (clocknext_list_outcomes)."),
   unitId: external_exports.string().optional().describe("UNIT only: id of an existing unit (clocknext_list_units)."),
+  pricingMetricId: external_exports.string().optional().describe(
+    "PRICING_METRIC only: id of an existing COMPOSITE (clocknext_list_composites). This component is the ONLY thing that makes a composite bill \u2014 the catalogue entry alone charges nobody."
+  ),
   quantity: external_exports.number().optional().describe(
-    "CREDIT/OUTCOME/UNIT only: the granted quantity \u2014 REQUIRED when billingMode is ADVANCE, omit when ARREAR (metered)."
+    "CREDIT/OUTCOME/UNIT/PRICING_METRIC only: the granted quantity \u2014 REQUIRED when billingMode is ADVANCE, omit when ARREAR (metered). For PRICING_METRIC + ADVANCE it is a prepaid POOL of composite-occurrence slots shared across the wrapped items: each distinct tag value claims one slot on completion, repeats reuse it, and once the pool is empty further occurrences are refused rather than billed."
   )
 }).describe("One entitlement line in the plan.");
 var unitTier = external_exports.object({
@@ -22587,7 +22592,7 @@ var planInput = {
   currencyCode: external_exports.string().optional().describe("ISO 4217 (3 letters). Default USD."),
   isActive: external_exports.boolean().optional().describe("Whether the plan is active/sellable."),
   components: external_exports.array(planComponent).min(1).describe(
-    "At least one entitlement line. CREDIT/OUTCOME/UNIT components reference an existing resource by id \u2014 create those first."
+    "At least one entitlement line. CREDIT/OUTCOME/UNIT components reference an existing resource by id, and PRICING_METRIC references an existing composite by pricingMetricId \u2014 create those first."
   )
 };
 var creditInput = {
@@ -22600,7 +22605,7 @@ var creditInput = {
   ),
   marginPercent: external_exports.number().min(0).describe("Markup over the computed base cost, as a percent (100 = double the base = pricePerCredit)."),
   tokensPerCredit: external_exports.number().min(0).optional().describe(
-    "Display-only metadata: the token volume of the pricing bundle shown in the dashboard. Does NOT affect draw-down \u2014 credits consumed per signal = provider cost / basePrice. Default 0."
+    "Display-only metadata: the token volume of the pricing bundle shown in the ClockNext product. Does NOT affect draw-down \u2014 credits consumed per signal = provider cost / basePrice. Default 0."
   ),
   description: external_exports.string().optional().describe("Optional human-readable description.")
 };
@@ -22793,22 +22798,24 @@ function registerCatalogueTools(server, cnk) {
     input: planInput,
     desc: {
       list: "List the organisation's billing plans (id, name, billing cycle, price, active). Find a plan id, or see what's on offer. Pass active=true for only sellable plans, active=false for only archived ones.",
-      get: "Get one plan in full by id \u2014 its entitlement components (wallet/credit/outcome/unit/flat), billing cycle, currency and active state.",
+      get: "Get one plan in full by id \u2014 its entitlement components (wallet/credit/outcome/unit/flat/composite), billing cycle, currency and active state. A composite component reads back as type PRICING_METRIC with its pricingMetricId, so a read\u2192edit\u2192update round-trip keeps it.",
       create: [
-        "Create a billing plan bundling one or more entitlement `components`: WALLET (prepaid USD balance, debited at raw model cost \u2014 no margin), FLAT (one-off fee), or CREDIT/OUTCOME/UNIT entitlements referencing an existing resource by id.",
+        "Create a billing plan bundling one or more entitlement `components`: WALLET (prepaid USD balance, debited at raw model cost \u2014 no margin), FLAT (one-off fee), CREDIT/OUTCOME/UNIT entitlements referencing an existing resource by id, or PRICING_METRIC referencing an existing COMPOSITE by pricingMetricId.",
         "",
         "Rules:",
         "- Create referenced credits/outcomes/units first (clocknext_create_credit / _outcome / _unit), then pass their ids.",
+        "- To SELL a composite, add a PRICING_METRIC component with the composite's id as pricingMetricId (clocknext_list_composites). This is the only thing that makes a composite bill \u2014 the catalogue entry alone charges nobody, errors nowhere, and looks configured. ADVANCE needs a quantity: a prepaid POOL of occurrence slots shared across the wrapped items.",
         "- Each component's billingMode is ADVANCE (up-front, needs amount/quantity) or ARREAR (metered).",
         "- Set walletFundedArrear:true to pay metered (ARREAR) usage from the plan's prepaid WALLET as it happens (one invoice/cycle, wallet may go negative) instead of a separate cycle-end arrear invoice. Requires >=1 ARREAR credit/outcome/unit AND an ADVANCE WALLET component, or the backend rejects it (422).",
         "- FREE plans must be ADVANCE-only with no FLAT component.",
-        "- Creates a real, sellable plan \u2014 get pricing right first. Prefer the dashboard plan builder (https://payments.clocknext.com/plans); this is the fallback."
+        "- Creates a real, sellable plan \u2014 get pricing right first. Prefer the plan builder in the ClockNext product (https://payments.clocknext.com/plans); this is the fallback."
       ].join("\n"),
       update: [
         "Replace a plan by id with a COMPLETE new definition (same shape as create).",
         "",
         "Rules:",
-        "- Full rewrite, not a patch \u2014 omitted fields are dropped. Read it first with clocknext_get_plan, edit, then send the whole thing back.",
+        "- Full rewrite, not a patch \u2014 omitted fields are dropped. Read it first with clocknext_get_plan, edit, then send the whole thing back. Re-send every component you want to keep, PRICING_METRIC (composite) lines included \u2014 dropping one unsells that composite.",
+        "- Components are replaced, not edited in place: every component gets a NEW id on each update, even ones you sent back unchanged. Never store a component id as a durable handle.",
         "- walletFundedArrear is part of that full definition \u2014 re-send it (with the ADVANCE WALLET + ARREAR components it requires) or it reverts to false. carryForward is deprecated and ignored.",
         "- Changes apply going forward; customers already on the plan keep their terms."
       ].join("\n"),
@@ -22863,7 +22870,7 @@ function registerCatalogueTools(server, cnk) {
         "Rules:",
         "- Price is model-grounded: give the `models` mixer + `marginPercent`; the tool reads live model prices and computes the base price + price-per-credit. Never hand-typed.",
         "- Enable the models you price against first (clocknext_add_model / _list_models).",
-        "- Prefer the dashboard credits builder (https://payments.clocknext.com/credits) \u2014 its live preview records the full per-model bundle; this fallback stores the computed price only.",
+        "- Prefer the credits builder in the ClockNext product (https://payments.clocknext.com/credits) \u2014 its live preview records the full per-model bundle; this fallback stores the computed price only.",
         "- A plan grants the credit via a CREDIT component referencing its id."
       ].join("\n"),
       update: [
@@ -22935,7 +22942,7 @@ function registerCatalogueTools(server, cnk) {
         "- TWO kinds of agent key, both required and both unique org-wide, in separate namespaces: the outcome's own top-level `agentKey` (its identity), and each step's `agentKey` (what usage is reported against). Never reuse one as the other.",
         "- Price is model-grounded: each step's base cost is computed from live model prices, summed, then `marginPercent` applied. Never hand-typed.",
         "- Every step is an LLM step. A fixed-cost / non-LLM event (an upload, an export) is a UNIT, not an outcome step.",
-        "- Prefer the dashboard outcomes builder (https://payments.clocknext.com/outcomes); this is the fallback.",
+        "- Prefer the outcomes builder in the ClockNext product (https://payments.clocknext.com/outcomes); this is the fallback.",
         "- A plan grants it via an OUTCOME component referencing its id."
       ].join("\n"),
       update: [
@@ -22978,7 +22985,7 @@ function registerCatalogueTools(server, cnk) {
         "Rules:",
         "- Price it FLAT (single `flatPrice` per event, default 0) or tiered (pricingType SLAB or VOLUME with `tiers`).",
         "- Reported against a lowercased stable `agentKey` \u2014 its durable identity, unique org-wide.",
-        "- Prefer the dashboard units builder (https://payments.clocknext.com/units); this is the fallback.",
+        "- Prefer the units builder in the ClockNext product (https://payments.clocknext.com/units); this is the fallback.",
         "- A plan meters it via a UNIT component referencing its id."
       ].join("\n"),
       update: [
@@ -23007,12 +23014,14 @@ function registerCompositeTools(server, cnk) {
     {
       title: "ClockNext: list composites",
       description: [
-        "List the organisation's composites \u2014 bundles of credits / outcomes / units grouped under one tag and billed as ONE thing. Returns each composite's `refId` (what you put in a signal's compositeRef) and the catalogue items it is restricted to, with their agentKeys.",
+        "List the organisation's composites \u2014 bundles of credits / outcomes / units grouped under one tag and billed as ONE thing. Returns each composite's `id` (what a plan's PRICING_METRIC component sends as pricingMetricId) and `refId` (what the product's code puts in a signal's composite tag), plus the catalogue items it is restricted to, with their agentKeys.",
         "",
         "Rules:",
         "- Call this BEFORE tagging any signal with a composite: only a live composite's refId resolves, and a tag naming nothing is silently ignored rather than rejected \u2014 so a typo looks exactly like success.",
+        "- Call it BEFORE clocknext_create_plan / clocknext_update_plan too: the `id` here is what a PRICING_METRIC component references as pricingMetricId. `id` and `refId` are NOT interchangeable \u2014 the plan wants the id, the signal wants the refId.",
         "- A composite is restricted to a set of credits/outcomes/units. Only signals naming something in that set may carry its tag. Empty lists mean unrestricted (legacy rows only).",
-        "- Pass active=true for only the ones a new signal can still be tagged with. Archived composites keep every row they already own."
+        "- Pass active=true for only the ones a new signal can still be tagged with. Archived composites keep every row they already own.",
+        "- READ-ONLY resource beyond create: there is no update and no archive tool for composites. If the user wants one changed, say so plainly and send them to the ClockNext product (https://payments.clocknext.com/pricing-metrics) \u2014 never create a second composite as a workaround, since the old one keeps resolving and both stay live."
       ].join("\n"),
       inputSchema: {
         active: external_exports.boolean().optional().describe(
@@ -23042,8 +23051,9 @@ function registerCompositeTools(server, cnk) {
         "- `refId` is the integration contract: it is what the product's code sends as a signal's compositeRef. Lowercased; letters, digits, _ and - only. It may NOT collide with a field the ingest body already owns (customerId, usage, agentKey, runId, member, custom, composite, \u2026) \u2014 a collision is refused here, not silently ignored later.",
         "- `entitlements` is REQUIRED \u2014 at least one credit / outcome / unit id. A composite restricted to nothing would accept every signal in the organisation. Get the ids from clocknext_list_credits / clocknext_list_outcomes / clocknext_list_units (ids, not agentKeys).",
         "- `price` is what ONE occurrence costs once a plan sells this. Creating a composite CHARGES NOBODY: an invoice is built from plan components, never from a catalogue entry.",
-        "- To actually bill it, add it to a plan as a component of type PRICING_METRIC (the wire still uses the old name) with a billingMode and, for ADVANCE, a quantity \u2014 that quantity is a prepaid pool of slots shared across the wrapped items. Tell the user this second step is required, or they will wonder why a composite they created bills nothing.",
-        "- There is no update or archive for composites on the public API yet \u2014 those are dashboard-only. Confirm the name and refId with the user before creating, because you cannot fix either from here."
+        "- To actually bill it, add it to a plan with clocknext_create_plan / clocknext_update_plan as a component of type PRICING_METRIC (the wire still uses the old name), passing the id this tool returns as `pricingMetricId`, plus a billingMode and, for ADVANCE, a quantity \u2014 that quantity is a prepaid pool of slots shared across the wrapped items. Tell the user this second step is required, or they will wonder why a composite they created bills nothing.",
+        "- A composite CANNOT BE EDITED once created \u2014 not from this tool, not from any tool here. There is no update and no archive on the public API: name, refId, price, description and which items it wraps are all frozen the moment this call succeeds. Changing any of them means doing it manually in the ClockNext product (https://payments.clocknext.com/pricing-metrics).",
+        "- So get it right the FIRST time: read the whole definition back to the user and get an explicit yes before calling this. If they later ask you to change a composite, do not hunt for a tool and do not create a near-duplicate \u2014 say plainly that composites can only be edited manually in the ClockNext product, and point them there."
       ].join("\n"),
       inputSchema: {
         name: external_exports.string().min(1).max(80).describe("Human-readable name, e.g. 'Voice AI call'."),
@@ -23572,7 +23582,7 @@ function registerWriteEnv(server) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.10.1" });
+  const server = new McpServer({ name: "clocknext", version: "0.10.2" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerSearchDocs(server);

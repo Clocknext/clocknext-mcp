@@ -30,7 +30,7 @@ request isn't about ClockNext, **ignore this skill entirely**.
 ## PRIME INVARIANT — AUTOMATIC EXECUTION DOES NOT MEAN AUTOMATIC PROGRESSION
 
 > **"Automatic" means: use the MCP to execute the CURRENTLY APPROVED step instead of the
-> dashboard. It does NOT mean: run the workflow automatically.**
+> ClockNext product. It does NOT mean: run the workflow automatically.**
 
 When the user picks Set it up using AI — or says "auto mode", "just do it", "you handle it", "I
 trust you" — that choice applies to **exactly one state**: the one the immediately
@@ -150,7 +150,7 @@ Authorization rules (MUST):
 | S4 | ⏸ CHOOSE_MODEL_SETUP_METHOD | Ask one question: How would you like to set up model support: Manually in the Clocknext (`{base}/settings/models`) or Set it up using AI? |
 | S5 | ⚙ DISCOVER_CODEBASE_MODELS | Exhaustive scan; after reporting, create approval for exactly one first model. Do not enable here. |
 | S6 | ⚙ ENABLE_MODELS | Enable or verify exactly one approved model per turn; loop until the complete approved model set is reconciled. |
-| S7 | ⚙ ENTITLEMENT_DESIGN | Docs-grounded explanation of credit/outcome/unit in the product's terms + recommendation. |
+| S7 | ⚙ ENTITLEMENT_DESIGN | Docs-grounded explanation of credit/outcome/unit/composite in the product's terms + recommendation. |
 | S8 | ⏸ ENTITLEMENT_SELECTION | Which entitlement (type + what it bills) does the user want first? |
 | S9 | ⚙ ENTITLEMENT_SKETCH | Sketch it BEFORE creating: mixer values, pricing assumptions, remaining decisions one per turn. |
 | S10 | ⏸ CHOOSE_ENTITLEMENT_CREATION_METHOD | Ask one question: How would you like to create the named entitlement: Manually in the Clocknext or Set it up using AI? For credits and outcomes, recommend Manually in the Clocknext because it shows a live price preview. |
@@ -174,7 +174,7 @@ Authorization rules (MUST):
 | S28 | ⛔ MONEY_GATE_2 | The real-signal question, asked ALONE. Gate 1 did NOT cover this. |
 | S29 | ⚙ REAL_SIGNAL | Fire exactly one approved real signal. |
 | S30 | ⚙ VERIFY_USAGE_AND_BALANCE | Read back usage and balances where applicable; prove credit/outcome/wallet logs and Unit event counts landed. |
-| S31 | ⏸ CLEANUP | Offer dashboard-only cleanup (no MCP tool exists — never improvise one). |
+| S31 | ⏸ CLEANUP | Offer cleanup in the ClockNext product (no MCP tool exists — never improvise one). |
 | S32 | ⏸ REAL_CUSTOMER_ONBOARDING_DECISION | "Wire real customer onboarding now?" |
 
 **Re-entry:** on resume, do NOT trust the conversation's claims about what happened — not
@@ -182,7 +182,7 @@ even your own earlier messages. Re-enter at S1, re-derive everything (S3), and f
 only past states whose results you have re-verified with tools. Reconciliation is never
 skippable.
 
-**Manually in the Clocknext always means:** the exact dashboard deep-link (`{base}` URLs below; the full map
+**Manually in the Clocknext always means:** the exact ClockNext product deep-link (`{base}` URLs below; the full map
 is `references/ui-links.md`), exactly what to enter, then one question asking whether the
 user will confirm completion — and
 you verify with the list tools before advancing. **Set it up using AI always means:** state exactly
@@ -199,7 +199,7 @@ guardrails; don't nag (and `references/testing.md` follows the same rule).
 ### S3 · Reconcile
 List models, credits, outcomes, units, plans, and customers. For each candidate test customer,
 read its current plan/subscription with `clocknext_get_customer_plan`; if purchase history
-cannot be read by MCP, direct the user to the dashboard and ask them to report any active or
+cannot be read by MCP, direct the user to the ClockNext product and ask them to report any active or
 scheduled purchase. Report what exists so everything downstream
 reuses instead of duplicating. If an entitlement exists but is archived/inactive, the fix
 later is `clocknext_unarchive_credit`/`_unit`/`_outcome`/`_plan` — NOT an update:
@@ -243,7 +243,7 @@ supported model. Details: `references/pricing-and-models.md`.
 
 ### S7–S12 · Entitlements (loop until the user is happy)
 S7: ground in the docs first (`clocknext_search_docs kind=concept` → `clocknext_get_doc`),
-then explain the three types **in the product's own terms** and recommend a fit
+then explain ALL FOUR types **in the product's own terms** and recommend a fit
 (`references/entitlements.md` is the decision guide; open the deep reference before
 pricing or explaining a type):
 - **Credit** — token-metered balance drawn down by real token cost. Variable, token-shaped
@@ -256,29 +256,31 @@ pricing or explaining a type):
 - **Composite** — several of the above bundled and billed as ONE thing, per completed
   occurrence ("$2 per call", where a call is 2 credits + 4 units). Only offer it once the
   individual meters are settled — it is priced on top of them. Two steps, and the second is
-  the one people forget: creating a composite charges nobody, a plan has to SELL it. Deep:
-  `references/composite.md`.
+  the one people forget: creating a composite charges nobody, a plan has to SELL it. And it
+  is **the one thing here you cannot edit afterwards** — no update, no archive, only in the
+  ClockNext product — so confirm the whole definition before creating. Deep: `references/composite.md`.
 
 S8 asks which they want (recommendation vs their own choice) — one question.
 S9 **sketches before creating**: name, what it bills, the model mixer grounding (model,
 avg tokens, input/output/cache split estimated from the code) and the pricing assumptions,
 in plain words. Any outstanding decision (e.g. the markup) is its own question, one per
 turn. **Never create first and explain pricing afterward. Never invent a price, never
-hand-type a token-metered base price — the mixer computes it** (dashboard live-preview on
+hand-type a token-metered base price — the mixer computes it** (live preview in the ClockNext product on
 Manually in the Clocknext, `computeMixerBase` inside `create_credit`/`create_outcome` when
 the user chooses Set it up using AI).
 S10 asks one question — Manually in the Clocknext or Set it up using AI — for the **named
 entitlement**. For credits and outcomes, recommend **Manually in the Clocknext** because the
-dashboard shows a live price preview and stores the full per-model pricing bundle, which
+ClockNext product shows a live price preview and stores the full per-model pricing bundle, which
 the MCP path cannot (it stores only the final computed number) — that record makes later
 re-pricing and audits far easier. Units are simpler; Set it up using AI is usually fine.
 S11 carries out the selected creation method and creates the entitlement **active** (don't
 stage inactive as a ritual — only build inactive if the user asks to review first). For the
-manual path, give the exact dashboard entries and wait for the user's confirmation before
+manual path, give the exact entries to make in the ClockNext product and wait for the user's confirmation before
 verifying. Report the grounded price.
 S12 asks: another entitlement, or move to the plan? Loop to S8 until they're done.
 
-> **Wallet** isn't one of the three — it's a plan component: prepaid USD. Two debit rules,
+> **Wallet** isn't one of the four — it's a plan component, not a catalogue entitlement:
+> prepaid USD. Two debit rules,
 > say them plainly: **plain wallet signals debit at raw model cost (no margin — no profit
 > on wallet-metered spend), but wallet-funded metered usage (`walletFundedArrear`, S13)
 > debits at the customer price — margin included, profit preserved.** Unit-FLAT (per
@@ -438,14 +440,14 @@ Unit event count changes are used for Units). Unit
 consumption is confirmed through the product's supported Unit usage/event-count readback — the
 MCP has no unit-event tool and an ARREAR Unit may have no balance decrement. “Sent” is not proof;
 **the event landed and the expected count changed** is. Report proof, ask “Shall I move to
-dashboard cleanup?” and STOP. Details: `references/testing.md`.
+cleanup in the ClockNext product?” and STOP. Details: `references/testing.md`.
 
 ### S31 · Cleanup
-Offer to clean up the test artifacts — and say plainly this happens **in the dashboard,
-not via the MCP**: there is NO MCP tool to void an invoice or delete a customer, and you
+Offer to clean up the test artifacts — and say plainly this happens **in the ClockNext
+product, not via the MCP**: there is NO MCP tool to void an invoice or delete a customer, and you
 must never improvise one. Link `{base}/customers`. If the user chooses cleanup, ask them to
 report when it is complete; do not claim completion or advance until they report back. Then
-reconcile the dashboard result in a new turn before entering S32.
+reconcile the result from the ClockNext product in a new turn before entering S32.
 
 ### S32 · Real onboarding
 Ask only: "Wire real customer onboarding now?" The answer authorizes only the decision to

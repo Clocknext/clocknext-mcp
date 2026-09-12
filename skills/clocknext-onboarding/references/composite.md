@@ -34,8 +34,10 @@ from a catalogue entry. There are two steps and both are required:
 
 1. **`clocknext_create_composite`** — defines what the bundle is and what one occurrence
    costs.
-2. **Sell it on a plan** — add a component of type `PRICING_METRIC` referencing the
-   composite id, with a `billingMode` and (for ADVANCE) a `quantity`.
+2. **Sell it on a plan** — `clocknext_create_plan` / `clocknext_update_plan` with a
+   component of type `PRICING_METRIC` whose `pricingMetricId` is the composite's **`id`**
+   (not its `refId` — the plan wants the id, the signal wants the refId), plus a
+   `billingMode` and (for ADVANCE) a `quantity`.
 
 Say this out loud to the user. A composite that was created but never put on a plan bills
 nothing, produces no error, and looks correctly configured — it is the single most likely
@@ -55,8 +57,18 @@ The entitlement set is the composite's **restriction**: only signals naming some
 that set may carry its tag. It is required precisely because a composite restricted to
 nothing would absorb every signal in the organisation.
 
-There is **no update and no archive** on the public API — both are dashboard-only. Confirm
-`name` and `refId` with the user before creating, because you cannot fix either from here.
+### You cannot edit a composite. At all.
+There is **no update and no archive** on the public API — `clocknext_list_composites` and
+`clocknext_create_composite` are the only two tools that exist. The moment create succeeds,
+**everything** is frozen: `name`, `refId`, `price`, `description` and which items it wraps.
+Fixing any of them means doing it manually in the ClockNext product
+(`{base}/pricing-metrics`).
+
+So **read the full definition back and get an explicit yes before you call create** — this
+is the one catalogue object you get a single attempt at. If the user later asks to change a
+composite, don't go looking for a tool and **don't create a second one as a workaround**
+(the old one keeps resolving at ingest, and you end up with two live bundles). Say plainly
+that composites can only be edited manually in the ClockNext product, and point them there.
 
 ## The two billing modes
 
@@ -115,7 +127,7 @@ exactly like success and nothing anywhere reports it.
 ## Gotchas
 - **Created but not on a plan → bills nothing, silently.** The most common failure.
 - **A typo'd `refId` at runtime is invisible.** Nothing errors; the occurrence never exists.
-- **Renaming a `refId`** (dashboard only) keeps all history — rows bind by id — but cuts
+- **Renaming a `refId`** (only possible in the ClockNext product) keeps all history — rows bind by id — but cuts
   ingest over immediately, so callers still sending the old property stop being counted with
   no error. Ship the new property to callers first, then rename.
 - **One composite per signal** through the SDK's `composite: { ref, value }`. The wire format
