@@ -1,14 +1,14 @@
-import { ClockNext } from "@clocknext/sdk";
+import { ClockNextApi } from "./api";
 
 /**
- * Build the ClockNext client from the environment.
+ * Build the ClockNext API client from the environment.
  *
  * The customer supplies their per-organisation key (Settings → API Keys) as
  * `CLOCKNEXT_API_KEY`. `CLOCKNEXT_BASE_URL` optionally overrides the API origin
  * (e.g. to point at staging). The key is a secret with org-wide write access —
  * it lives only in the MCP server's env, never in the model's context.
  */
-export function makeClient(): ClockNext {
+export function makeClient(): ClockNextApi {
   const apiKey = process.env.CLOCKNEXT_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -17,5 +17,5 @@ export function makeClient(): ClockNext {
     );
   }
   const baseUrl = process.env.CLOCKNEXT_BASE_URL;
-  return new ClockNext({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
+  return new ClockNextApi({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
 }

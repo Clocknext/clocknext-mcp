@@ -267,14 +267,14 @@ proof one landed.
 ## Development
 
 ```bash
-npm install          # pulls the published @clocknext/sdk
+npm install
 npm run build        # tsup → dist/index.js (executable bin)
 npm run dev          # run from source via tsx
 CLOCKNEXT_API_KEY=cnk_... npm start
 ```
 
-Built on the official `@modelcontextprotocol/sdk` over `@clocknext/sdk` (bundled
-into `dist/` by tsup). stdio today; a hosted Streamable‑HTTP variant is planned.
+Built on the official `@modelcontextprotocol/sdk`, with its own small `fetch`
+client for the ClockNext API (`src/api.ts`), all bundled into `dist/` by tsup. stdio today; a hosted Streamable‑HTTP variant is planned.
 Logs go to **stderr** (stdout is the protocol channel). The committed `dist/` is
 what the plugin runs — rebuild and commit it on any code change.
 

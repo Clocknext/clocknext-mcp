@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Sibling repos (one directory up, in `../`)
 
 - `../Clocknext-Payment-Saas` → the main payments app (the `/api/v1` server this talks to).
-- `../clocknext-sdk-cleanup` → the TypeScript SDK.
+- `../clocknext-sdk` → the TypeScript SDK.
 - `../clocknext-docs` → the docs.
 
 ## What this repo is
@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm install          # pulls the published @clocknext/sdk
+npm install
 npm run build        # tsup → dist/index.js (single self-contained executable bin)
 npm run dev          # run from source via tsx (needs CLOCKNEXT_API_KEY in env)
 npm run typecheck    # tsc --noEmit (strict); CI runs this before build
@@ -35,16 +35,14 @@ There is **no test suite and no linter** — `npm run typecheck` is the only sta
 
 - **Entry:** `src/index.ts` — builds one `ClockNext` client from env (`makeClient()`), constructs the `McpServer`, and calls each `register*` function to attach tools. `main()` connects over `StdioServerTransport`.
 - **stdout is the JSON-RPC channel — never write to it.** All logging goes to **stderr** (`console.error`). A stray `console.log` corrupts the protocol.
-- **The `cnk_…` API key never enters the model's context.** It's read from `process.env.CLOCKNEXT_API_KEY` inside the server and passed to the SDK / raw fetches; tools receive only non-secret args.
+- **The `cnk_…` API key never enters the model's context.** It's read from `process.env.CLOCKNEXT_API_KEY` inside the server and passed to the API client (`src/api.ts`); tools receive only non-secret args.
 - **Every tool lives in its own `src/tools/*.ts`** and exports a `registerXxx(server, cnk)` function. To add a tool: create the file, export a register fn, and call it from `index.ts`.
-- **Two API paths:**
-  - **Typed SDK (`@clocknext/sdk`)** — the default for everything (`cnk.signals`, `cnk.plans`, `cnk.customers`, `cnk.workspace.models`, …).
-  - **Raw `fetch` with the `cnk_` bearer** — only for MCP-internal endpoints deliberately kept off the public SDK: `clocknext_add_model` (`POST /api/v1/models`) and `clocknext_bulk_import_customers` (`POST /api/v1/customers/bulk`). Base URL mirrors the SDK via `CLOCKNEXT_BASE_URL` (default `https://payments.clocknext.com`).
+- **One API client, no SDK:** every ClockNext API call goes through `src/api.ts` (`ClockNextApi`) — plain `fetch` with the `cnk_` bearer. This repo does NOT depend on `@clocknext/sdk`: the public SDK only covers the documented endpoints, and most of what the MCP does (models, credits / outcomes / units / composites, plan CRUD, bulk import) is deliberately kept out of it. `ClockNextApi` mirrors the old SDK transport: timeout, both response envelopes, typed errors (`AuthError`, `NotFoundError`, …), and retries only for GET / PUT / DELETE. Its method names (`cnk.credits.list`, `cnk.plans.update`, …) match the SDK's so tool code reads the same. Base URL from `CLOCKNEXT_BASE_URL` (default `https://payments.clocknext.com`). To call a new endpoint, add a method to `ClockNextApi` — never `fetch` directly from a tool.
   - Public docs tools (`search_docs`, `get_doc`) use `fetchJson` (`src/tools/http.ts`) against the docs origin — **no API key** (`CLOCKNEXT_DOCS_URL`, default `https://help.clocknext.com`, resolved defensively in `docs-url.ts`).
 
 ### Shared conventions (follow these when adding/editing tools)
 
-- **Result helpers in `src/tools/util.ts`:** return `jsonResult(data)` for success and `errorResult(msg)` for failures — **catch SDK/network errors and turn them into `errorResult(errMsg(err))`; do not let a tool throw.** `errMsg` special-cases `ClockNextError` to include the HTTP status.
+- **Result helpers in `src/tools/util.ts`:** return `jsonResult(data)` for success and `errorResult(msg)` for failures — **catch API/network errors and turn them into `errorResult(errMsg(err))`; do not let a tool throw.** `errMsg` special-cases `ClockNextError` (from `src/api.ts`) to include the HTTP status.
 - **Inputs are Zod `ZodRawShape`s** (flat objects, as MCP requires). Push validation into the schema (`.refine`, `.enum`, `.min`) where possible. Cross-field rules that can't be expressed flatly are enforced in the handler and returned as an `errorResult` (e.g. `create_composite` requiring at least one entitlement id).
 - **Descriptions are load-bearing.** Tool and field `describe()` text is the agent's only guidance — it encodes rules (idempotency, "records for real", "full rewrite not a patch", "prefer the ClockNext product"). Keep them precise and current when behavior changes.
   **Never write "dashboard"** in a tool description, a skill file, or anything the user sees — the product is called **the ClockNext product**, and doing something there is **manually / Manually in the Clocknext**.
@@ -63,7 +61,7 @@ There is **no test suite and no linter** — `npm run typecheck` is the only sta
 
 ## SDK authoring conventions (`@clocknext/sdk` style)
 
-This repo *consumes* `@clocknext/sdk`, but usage-billing work often spans both. When you write or extend the SDK (its own repo), or model SDK-shaped types here, follow the conventions the installed SDK already demonstrates (`node_modules/@clocknext/sdk/dist/index.d.ts` is the best reference — read it). Several are already mirrored in this server's tools.
+This repo no longer depends on `@clocknext/sdk`, but usage-billing work often spans both. When you write or extend the SDK (its own repo, `../clocknext-sdk`), follow the conventions it already demonstrates (its `src/` is the best reference — read it). Several are mirrored in this server's `src/api.ts`.
 
 **Types are the API — make illegal states unrepresentable.**
 - **Discriminated unions for mutually-exclusive shapes**, keyed on a literal `type` field. `Signal = CreditSignal | WalletSignal | OutcomeSignal` mirrors the server's Zod `recordSchema`, so per-variant required fields (`agentKey` on credit/outcome, not wallet) are enforced at **compile time instead of surfacing as runtime 422s**. When the server validates with a discriminated schema, mirror it as a discriminated union — don't collapse it into one interface with optional fields.

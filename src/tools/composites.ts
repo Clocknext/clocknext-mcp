@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ClockNext } from "@clocknext/sdk";
+import type { ClockNextApi } from "../api";
 import { errMsg, errorResult, jsonResult } from "./util";
 
 /**
@@ -20,7 +20,7 @@ import { errMsg, errorResult, jsonResult } from "./util";
  * SELLS it. That second step is `clocknext_create_plan` with a
  * `PRICING_METRIC` component — the wire still uses the old name for it.
  */
-export function registerCompositeTools(server: McpServer, cnk: ClockNext): void {
+export function registerCompositeTools(server: McpServer, cnk: ClockNextApi): void {
   server.registerTool(
     "clocknext_list_composites",
     {

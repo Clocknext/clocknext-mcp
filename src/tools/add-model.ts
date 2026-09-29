@@ -1,25 +1,22 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ClockNext } from "@clocknext/sdk";
+import { ClockNextError, type ClockNextApi } from "../api";
 import { errMsg, errorResult, jsonResult } from "./util";
 
 /**
  * clocknext_add_model — enable a model for the org, autopriced from the catalog.
  *
- * MCP-internal on purpose: it POSTs the org's `cnk_` key directly to the
- * (undocumented) `POST /api/v1/models` endpoint, NOT through @clocknext/sdk — so
- * this capability stays off the public SDK and docs surface. Base URL mirrors the
- * SDK's (`CLOCKNEXT_BASE_URL`, default production).
+ * MCP-internal on purpose: `POST /api/v1/models` is not in the public SDK or
+ * docs. It goes through the MCP's own API client (`src/api.ts`), which uses the
+ * org's `cnk_` key and `CLOCKNEXT_BASE_URL` (default production).
  *
  * Only catalog models are supported. AUTO copies the catalog's prices; when the
  * catalog has no price for a model it is still enabled, but at $0 — the tool
  * then tells the caller to set the price on the Models page (it reads the price
- * back via the SDK to detect this).
+ * back to detect this).
  */
 
-const DEFAULT_BASE = "https://payments.clocknext.com";
-
-export function registerAddModel(server: McpServer, cnk: ClockNext): void {
+export function registerAddModel(server: McpServer, cnk: ClockNextApi): void {
   server.registerTool(
     "clocknext_add_model",
     {
@@ -49,45 +46,33 @@ export function registerAddModel(server: McpServer, cnk: ClockNext): void {
       annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ provider, model }) => {
-      const apiKey = process.env.CLOCKNEXT_API_KEY;
-      if (!apiKey) {
-        return errorResult("CLOCKNEXT_API_KEY is not set — cannot add a model.");
-      }
-      const base = (process.env.CLOCKNEXT_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
-      const modelsPage = `${base}/settings/models`;
+      const modelsPage = `${cnk.origin}/settings/models`;
 
       try {
-        const res = await fetch(new URL("/api/v1/models", base), {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            accept: "application/json",
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ provider, modelId: model, pricingMode: "AUTO" }),
-          signal: AbortSignal.timeout(10_000),
-        });
-        const json = (await res.json().catch(() => ({}))) as {
-          error?: string;
-          message?: string;
-          statusDetail?: { message?: string };
-        };
-
-        const reason =
-          json.statusDetail?.message || json.error || json.message || `HTTP ${res.status}`;
-        // Re-adding an enabled model is the idempotent no-op this tool advertises
-        // (idempotentHint: true) — the backend calls it an error, but the caller's
-        // goal is already satisfied, so fall through to the price read-back rather
-        // than blaming a catalog that has nothing to do with it.
-        const alreadyEnabled = /already enabled/i.test(reason);
-
-        if (!res.ok && !alreadyEnabled) {
-          // Only catalog models are supported, and the server returns the same
-          // error whether the MODEL or the PROVIDER is unknown — so guide the
-          // caller for both without offering a manual path that won't work.
-          return errorResult(
-            `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. Browse the addable catalog on the Models page (${modelsPage}); clocknext_list_models only shows what's already enabled.`,
-          );
+        let alreadyEnabled = false;
+        try {
+          await cnk.workspace.addModel({ provider, modelId: model, pricingMode: "AUTO" });
+        } catch (err) {
+          // A request that never got an answer (network / timeout) is not a
+          // catalog problem — report it as it is.
+          const serverAnswered = err instanceof ClockNextError && err.status !== undefined;
+          if (!serverAnswered) {
+            throw err;
+          }
+          const reason = err.message;
+          // Re-adding an enabled model is the idempotent no-op this tool advertises
+          // (idempotentHint: true) — the backend calls it an error, but the caller's
+          // goal is already satisfied, so fall through to the price read-back rather
+          // than blaming a catalog that has nothing to do with it.
+          alreadyEnabled = /already enabled/i.test(reason);
+          if (!alreadyEnabled) {
+            // Only catalog models are supported, and the server returns the same
+            // error whether the MODEL or the PROVIDER is unknown — so guide the
+            // caller for both without offering a manual path that won't work.
+            return errorResult(
+              `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. Browse the addable catalog on the Models page (${modelsPage}); clocknext_list_models only shows what's already enabled.`,
+            );
+          }
         }
 
         // Enabled. AUTO copies catalog prices, but the catalog may have none —

@@ -1,7 +1,6 @@
 /**
- * Minimal JSON fetch with a timeout, for the handful of tools that hit plain
- * HTTP endpoints outside the ClockNext SDK (currently just the public docs
- * search endpoint). Everything else should go through `@clocknext/sdk`.
+ * Minimal JSON fetch with a timeout, for the public docs tools (search / get
+ * page) — no API key. Every ClockNext API call goes through `src/api.ts`.
  */
 export async function fetchJson<T = unknown>(
   url: string | URL,

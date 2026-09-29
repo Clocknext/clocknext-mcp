@@ -1,4 +1,4 @@
-import { ClockNextError } from "@clocknext/sdk";
+import { ClockNextError } from "../api";
 
 /** A successful tool result carrying a JSON payload as pretty text. */
 export function jsonResult(data: unknown) {

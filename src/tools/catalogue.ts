@@ -1,13 +1,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ClockNext } from "@clocknext/sdk";
+import type { ClockNextApi } from "../api";
 import { errMsg, errorResult, jsonResult } from "./util";
 
 /**
  * Operate-mode catalogue tools — CRUD (create / read / update / archive) over the
  * /api/v1 catalogue resources: plans, credits, outcomes, units. These MUTATE the
- * organisation's billing configuration, so they wrap the typed @clocknext/sdk
- * methods rather than letting a model assemble raw API calls.
+ * organisation's billing configuration, so they go through the MCP's own API
+ * client (`src/api.ts`) rather than letting a model assemble raw API calls.
  *
  * Credit / outcome PRICING is model-grounded: the tool takes a `models` mixer
  * (enabled catalog model + avg tokens + input/output/cache split), reads the org's
@@ -59,7 +59,7 @@ type MixerLine = { model: string; avgTokens: number; inputPct: number; outputPct
  * total 100, so a price can never be grounded in a disabled/unknown model.
  */
 async function computeMixerBase(
-  cnk: ClockNext,
+  cnk: ClockNextApi,
   lines: readonly MixerLine[],
 ): Promise<{ ok: true; basePrice: number } | { ok: false; error: string }> {
   let models;
@@ -487,7 +487,7 @@ function registerCrud(
 
 // ---------- wire the four resources ----------
 
-export function registerCatalogueTools(server: McpServer, cnk: ClockNext): void {
+export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): void {
   registerCrud(server, {
     resource: "plan",
     plural: "plans",

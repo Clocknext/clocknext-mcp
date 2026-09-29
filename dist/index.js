@@ -21145,149 +21145,14 @@ var StdioServerTransport = class {
   }
 };
 
-// node_modules/@clocknext/sdk/dist/index.js
+// src/api.ts
 var DEFAULT_BASE_URL = "https://payments.clocknext.com";
-function num(value, fallback, min) {
-  return typeof value === "number" && Number.isFinite(value) && value >= min ? value : fallback;
-}
-function resolveConfig(config2) {
-  if (!config2.apiKey || typeof config2.apiKey !== "string") {
-    throw new Error("ClockNext: `apiKey` is required.");
-  }
-  const fetchImpl = config2.fetch ?? (typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : void 0);
-  if (!fetchImpl) {
-    throw new Error(
-      "ClockNext: no global `fetch` found. Use Node 18+, or pass a `fetch` implementation."
-    );
-  }
-  return {
-    apiKey: config2.apiKey,
-    baseUrl: (config2.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, ""),
-    mode: config2.mode ?? "async",
-    timeoutMs: num(config2.timeoutMs, 1e4, 1),
-    batch: {
-      maxSize: num(config2.batch?.maxSize, 20, 1),
-      maxIntervalMs: num(config2.batch?.maxIntervalMs, 2e3, 0),
-      maxConcurrency: num(config2.batch?.maxConcurrency, 5, 1),
-      maxQueueSize: num(config2.batch?.maxQueueSize, 1e4, 1)
-    },
-    retry: {
-      maxAttempts: num(config2.retry?.maxAttempts, 5, 1),
-      baseDelayMs: num(config2.retry?.baseDelayMs, 200, 0),
-      maxDelayMs: num(config2.retry?.maxDelayMs, 1e4, 0)
-    },
-    fetch: fetchImpl,
-    logger: config2.logger ?? {},
-    onError: config2.onError,
-    onFlush: config2.onFlush,
-    onRetry: config2.onRetry,
-    onDrop: config2.onDrop
-  };
-}
-var InMemoryQueue = class {
-  items = [];
-  push(item) {
-    this.items.push(item);
-  }
-  take(n) {
-    return this.items.splice(0, n);
-  }
-  size() {
-    return this.items.length;
-  }
-};
-var Flusher = class {
-  constructor(transport, cfg) {
-    this.transport = transport;
-    this.cfg = cfg;
-  }
-  transport;
-  cfg;
-  queue = new InMemoryQueue();
-  timer = null;
-  draining = null;
-  closed = false;
-  /** Buffer one signal. Drops (with onDrop) when closed or the queue is full. */
-  enqueue(item) {
-    if (this.closed) {
-      this.cfg.onDrop?.(item.signal, "send_failed");
-      return;
-    }
-    if (this.queue.size() >= this.cfg.batch.maxQueueSize) {
-      this.cfg.logger.warn?.("[clocknext] queue full \u2014 dropping signal");
-      this.cfg.onDrop?.(item.signal, "queue_full");
-      return;
-    }
-    this.queue.push(item);
-    if (this.queue.size() >= this.cfg.batch.maxSize) void this.flush();
-    else this.arm();
-  }
-  /** Arm the interval timer if it isn't already running. */
-  arm() {
-    if (this.timer || this.closed) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.flush();
-    }, this.cfg.batch.maxIntervalMs);
-    this.timer.unref?.();
-  }
-  /**
-   * Send everything currently buffered. Overlapping calls share the single
-   * in-progress drain, so total in-flight sends never exceed `maxConcurrency`.
-   */
-  flush() {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    if (!this.draining) {
-      this.draining = this.drain().finally(() => {
-        this.draining = null;
-      });
-    }
-    return this.draining;
-  }
-  /** Drain the buffer in concurrency-bounded waves until it's empty. */
-  async drain() {
-    let sent = 0;
-    while (this.queue.size() > 0) {
-      const wave = this.queue.take(this.cfg.batch.maxConcurrency);
-      const results = await Promise.all(wave.map((item) => this.send(item)));
-      sent += results.filter(Boolean).length;
-    }
-    if (sent > 0) this.cfg.onFlush?.(sent);
-  }
-  /** Send one item; never throws — failures surface via onError/onDrop. */
-  async send(item) {
-    try {
-      await this.transport.request({
-        method: "POST",
-        // Per-item, not per-Flusher: one route per meter. See `QueuedSignal`.
-        path: item.path,
-        body: item.body,
-        // Best-effort metering opts into retries on transient failures.
-        retry: true
-      });
-      return true;
-    } catch (error2) {
-      this.cfg.onError?.(error2, item.signal);
-      this.cfg.onDrop?.(item.signal, "send_failed");
-      return false;
-    }
-  }
-  get size() {
-    return this.queue.size();
-  }
-  /** Flush remaining signals, then refuse further enqueues. */
-  async close() {
-    this.closed = true;
-    await this.flush();
-  }
-};
+var DEFAULT_TIMEOUT_MS = 1e4;
+var MAX_ATTEMPTS = 5;
+var BASE_DELAY_MS = 200;
+var MAX_DELAY_MS = 1e4;
 var ClockNextError = class extends Error {
-  /** HTTP status, when the failure came from a server response. */
   status;
-  /** Whether the SDK considers this failure worth retrying. */
   retryable;
   constructor(message, opts = {}) {
     super(message);
@@ -21324,96 +21189,145 @@ var NetworkError = class extends ClockNextError {
   }
 };
 function errorFromResponse(status, message, retryAfterMs) {
-  const msg = message || `Request failed with status ${status}.`;
-  const opts = { status };
-  if (status === 400) return new ValidationError(msg, opts);
-  if (status === 401) return new AuthError(msg, opts);
-  if (status === 404) return new NotFoundError(msg, opts);
-  if (status === 408) return new ClockNextError(msg, { ...opts, retryable: true });
-  if (status === 409) return new ConflictError(msg, { ...opts, retryable: true });
-  if (status === 422) {
-    return /insufficient/i.test(msg) ? new AllowanceError(msg, opts) : new PlanError(msg, opts);
+  const text = message || `Request failed with status ${status}.`;
+  if (status === 400) {
+    return new ValidationError(text, { status });
   }
-  if (status === 429) return new RateLimitError(msg, { retryAfterMs });
-  if (status >= 500) return new ServerError(msg, { ...opts, retryable: true });
-  return new ClockNextError(msg, opts);
-}
-function isRetryable(error2) {
-  return error2 instanceof ClockNextError && error2.retryable;
+  if (status === 401) {
+    return new AuthError(text, { status });
+  }
+  if (status === 404) {
+    return new NotFoundError(text, { status });
+  }
+  if (status === 408) {
+    return new ClockNextError(text, { status, retryable: true });
+  }
+  if (status === 409) {
+    return new ConflictError(text, { status, retryable: true });
+  }
+  if (status === 422) {
+    if (/insufficient/i.test(text)) {
+      return new AllowanceError(text, { status });
+    }
+    return new PlanError(text, { status });
+  }
+  if (status === 429) {
+    return new RateLimitError(text, { retryAfterMs });
+  }
+  if (status >= 500) {
+    return new ServerError(text, { status, retryable: true });
+  }
+  return new ClockNextError(text, { status });
 }
 function parseRetryAfter(headers) {
-  const ms = headers.get("retry-after-ms");
-  if (ms) {
-    const n = Number(ms);
-    if (Number.isFinite(n) && n >= 0) return n;
+  const milliseconds = headers.get("retry-after-ms");
+  if (milliseconds) {
+    const value = Number(milliseconds);
+    if (Number.isFinite(value) && value >= 0) {
+      return value;
+    }
   }
-  const ra = headers.get("retry-after");
-  if (ra) {
-    const secs = Number(ra);
-    if (Number.isFinite(secs)) return Math.max(0, secs * 1e3);
-    const date3 = Date.parse(ra);
-    if (!Number.isNaN(date3)) return Math.max(0, date3 - Date.now());
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) {
+      return Math.max(0, seconds * 1e3);
+    }
+    const date3 = Date.parse(retryAfter);
+    if (!Number.isNaN(date3)) {
+      return Math.max(0, date3 - Date.now());
+    }
   }
   return void 0;
 }
-function computeBackoff(attempt, opts, retryAfterMs, rand = Math.random) {
-  if (retryAfterMs != null) return Math.min(retryAfterMs, opts.maxDelayMs);
-  const raw = opts.baseDelayMs * Math.pow(2, Math.max(0, attempt - 1));
-  const capped = Math.min(raw, opts.maxDelayMs);
-  return Math.round(capped * (0.5 + rand() * 0.5));
+function backoffDelay(attempt, retryAfterMs) {
+  if (retryAfterMs !== void 0) {
+    return Math.min(retryAfterMs, MAX_DELAY_MS);
+  }
+  const exponential = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+  const capped = Math.min(exponential, MAX_DELAY_MS);
+  const jitter = 0.5 + Math.random() * 0.5;
+  return Math.round(capped * jitter);
 }
 function sleep(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
 }
-var SDK_VERSION = "0.11.0";
-var Transport = class {
-  constructor(cfg) {
-    this.cfg = cfg;
+function activeQuery(params) {
+  if (params.active === void 0) {
+    return { active: void 0 };
   }
-  cfg;
-  async request(opts) {
-    const url = this.buildUrl(opts.path, opts.query);
-    const replaySafe = opts.method === "GET" || opts.method === "PUT" || opts.method === "DELETE";
-    const allowRetry = opts.retry ?? replaySafe;
-    const maxAttempts = allowRetry ? this.cfg.retry.maxAttempts : 1;
+  return { active: String(params.active) };
+}
+function idPath(base, id) {
+  return `${base}/${encodeURIComponent(id)}`;
+}
+var ClockNextApi = class {
+  apiKey;
+  baseUrl;
+  constructor(config2) {
+    this.apiKey = config2.apiKey;
+    this.baseUrl = (config2.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  }
+  /** The origin every request goes to, without a trailing slash. */
+  get origin() {
+    return this.baseUrl;
+  }
+  /**
+   * Send one request, retrying transient failures when the method is
+   * replay-safe (GET / PUT / DELETE). Returns the unwrapped `result`.
+   */
+  async request(options) {
+    const url = this.buildUrl(options.path, options.query);
+    const replaySafe = options.method === "GET" || options.method === "PUT" || options.method === "DELETE";
+    const maxAttempts = replaySafe ? MAX_ATTEMPTS : 1;
     let attempt = 0;
     while (true) {
-      attempt++;
+      attempt = attempt + 1;
       try {
-        return await this.once(url, opts);
+        return await this.sendOnce(url, options);
       } catch (error2) {
-        const canRetry = attempt < maxAttempts && isRetryable(error2);
-        if (!canRetry) throw error2;
-        const retryAfterMs = error2 instanceof RateLimitError ? error2.retryAfterMs : void 0;
-        const delayMs = computeBackoff(attempt, this.cfg.retry, retryAfterMs);
-        this.cfg.onRetry?.({ attempt, delayMs, error: error2 });
-        this.cfg.logger.debug?.(
-          `[clocknext] retry ${attempt}/${maxAttempts - 1} in ${delayMs}ms`,
-          error2 instanceof Error ? error2.message : error2
-        );
-        await sleep(delayMs);
+        const isRetryable = error2 instanceof ClockNextError && error2.retryable;
+        if (attempt >= maxAttempts || !isRetryable) {
+          throw error2;
+        }
+        let retryAfterMs = void 0;
+        if (error2 instanceof RateLimitError) {
+          retryAfterMs = error2.retryAfterMs;
+        }
+        await sleep(backoffDelay(attempt, retryAfterMs));
       }
     }
   }
-  /** One attempt: fetch + timeout + envelope/status handling. */
-  async once(url, opts) {
+  /** One attempt: fetch with a timeout, then unwrap the envelope. */
+  async sendOnce(url, options) {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs);
-    let res;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const headers = {
+      authorization: `Bearer ${this.apiKey}`,
+      accept: "application/json"
+    };
+    if (options.body !== void 0) {
+      headers["content-type"] = "application/json";
+    }
+    let response;
     try {
-      res = await this.cfg.fetch(url, {
-        method: opts.method,
-        headers: this.headers(opts),
-        body: opts.body === void 0 ? void 0 : JSON.stringify(opts.body),
+      response = await fetch(url, {
+        method: options.method,
+        headers,
+        body: options.body === void 0 ? void 0 : JSON.stringify(options.body),
         signal: controller.signal
       });
     } catch (err) {
-      const message2 = controller.signal.aborted ? `Request to ${opts.path} timed out after ${this.cfg.timeoutMs}ms.` : `Network error calling ${opts.path}: ${err instanceof Error ? err.message : String(err)}`;
-      throw new NetworkError(message2);
+      if (controller.signal.aborted) {
+        throw new NetworkError(`Request to ${options.path} timed out after ${timeoutMs}ms.`);
+      }
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new NetworkError(`Network error calling ${options.path}: ${reason}`);
     } finally {
       clearTimeout(timer);
     }
-    const text = await res.text();
+    const text = await response.text();
     let json = void 0;
     if (text) {
       try {
@@ -21421,969 +21335,206 @@ var Transport = class {
       } catch {
       }
     }
-    const obj = json ?? {};
-    const isNew = typeof obj === "object" && obj !== null && "statusDetail" in obj;
-    if (isNew) {
-      const detail = obj.statusDetail;
-      if (res.ok && detail?.status === "SUCCESS") {
-        return obj.result ?? {};
+    const body = json ?? {};
+    const retryAfterMs = parseRetryAfter(response.headers);
+    if (typeof body === "object" && body !== null && "statusDetail" in body) {
+      const detail = body.statusDetail;
+      if (response.ok && detail?.status === "SUCCESS") {
+        return body.result ?? {};
       }
-      const message2 = detail?.message ?? `Request failed with status ${res.status}.`;
-      throw errorFromResponse(res.status, message2, parseRetryAfter(res.headers));
+      const message2 = detail?.message ?? `Request failed with status ${response.status}.`;
+      throw errorFromResponse(response.status, message2, retryAfterMs);
     }
-    const envelope = obj;
-    if (res.ok && envelope.ok !== false) {
-      return envelope;
+    const oldEnvelope = body;
+    if (response.ok && oldEnvelope.ok !== false) {
+      return oldEnvelope;
     }
-    const message = envelope.error ?? text ?? `Request failed with status ${res.status}.`;
-    throw errorFromResponse(res.status, message, parseRetryAfter(res.headers));
-  }
-  headers(opts) {
-    const h = {
-      Authorization: `Bearer ${this.cfg.apiKey}`,
-      "User-Agent": `clocknext-sdk-js/${SDK_VERSION}`
-    };
-    if (opts.body !== void 0) h["Content-Type"] = "application/json";
-    return h;
+    const message = oldEnvelope.error ?? (text || `Request failed with status ${response.status}.`);
+    throw errorFromResponse(response.status, message, retryAfterMs);
   }
   buildUrl(path, query) {
-    let url = `${this.cfg.baseUrl}${path}`;
+    let url = `${this.baseUrl}${path}`;
     if (query) {
       const params = new URLSearchParams();
-      for (const [k, v] of Object.entries(query)) {
-        if (v !== void 0 && v !== "") params.set(k, String(v));
+      for (const [key, value] of Object.entries(query)) {
+        if (value !== void 0 && value !== "") {
+          params.set(key, String(value));
+        }
       }
-      const qs = params.toString();
-      if (qs) url += `?${qs}`;
+      const queryString = params.toString();
+      if (queryString) {
+        url = `${url}?${queryString}`;
+      }
     }
     return url;
   }
-};
-var Composites = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** List composites. Pass `{ active: true }` for only the ones a signal can
-   *  still be tagged with — the default list INCLUDES archived ones, which
-   *  keep every row they already own. */
-  async list(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/composites",
-      query: {
-        active: params.active === void 0 ? void 0 : String(params.active)
-      }
-    });
-    return res.composites;
-  }
-  /** Create a composite. `POST /api/v1/composites`. */
-  async create(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: "/api/v1/composites",
-      body: input
-    });
-    return res.composite;
-  }
-};
-var Credits = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** List credit types. Pass `{ active: true }` to only return active ones. */
-  async list(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/credits",
-      query: { active: params.active === void 0 ? void 0 : String(params.active) }
-    });
-    return res.credits;
-  }
-  /** Create a credit type; returns the created credit. `POST /api/v1/credits`. */
-  async create(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: "/api/v1/credits",
-      body: input
-    });
-    return res.credit;
-  }
-  /** Fetch one credit type with usage stats. `GET /api/v1/credits/:id`. */
-  async get(id) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: `/api/v1/credits/${encodeURIComponent(id)}`
-    });
-    return res.credit;
-  }
-  /** Update a credit type's definition; returns the updated credit. `PATCH /api/v1/credits/:id`. */
-  async update(id, input) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/credits/${encodeURIComponent(id)}`,
-      body: input
-    });
-    return res.credit;
-  }
-  /** Activate or deactivate a credit type. */
-  async setActive(id, isActive) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/credits/${encodeURIComponent(id)}`,
-      body: { isActive }
-    });
-    return res.credit;
-  }
-  /** Delete a credit type. Refused while a customer is linked to it. */
-  async delete(id) {
-    await this.transport.request({
-      method: "DELETE",
-      path: `/api/v1/credits/${encodeURIComponent(id)}`
-    });
-  }
-};
-var Customers = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** Create a customer. `POST /api/v1/customers`. */
-  async create(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: "/api/v1/customers",
-      body: input
-    });
-    return res.customer;
-  }
-  /** List customers, most-recent first (cursor-paginated). `GET /api/v1/customers`. */
-  async list(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/customers",
-      query: { limit: params.limit, q: params.q, cursor: params.cursor }
-    });
-    return { customers: res.customers, nextCursor: res.nextCursor };
-  }
-  /**
-   * Async iterator over ALL customers, transparently following the cursor.
-   * `for await (const c of cnk.customers.iterate()) { … }`
-   */
-  async *iterate(params = {}) {
-    let cursor;
-    do {
-      const page = await this.list({ ...params, cursor });
-      for (const c of page.customers) yield c;
-      cursor = page.nextCursor ?? void 0;
-    } while (cursor);
-  }
-  /** Fetch one customer. `GET /api/v1/customers/:id`. */
-  async get(id) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: `/api/v1/customers/${encodeURIComponent(id)}`
-    });
-    return res.customer;
-  }
-  /** Update a customer (partial). `PATCH /api/v1/customers/:id`. */
-  async update(id, input) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/customers/${encodeURIComponent(id)}`,
-      body: input
-    });
-    return res.customer;
-  }
-  /** Delete a customer (members, invitations, usage logs cascade). */
-  async delete(id) {
-    await this.transport.request({
-      method: "DELETE",
-      path: `/api/v1/customers/${encodeURIComponent(id)}`
-    });
-  }
-  /** A customer's usage history. `GET /api/v1/usage?customerId=`. */
-  async usage(id, params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: `/api/v1/usage`,
-      query: { customerId: id, limit: params.limit }
-    });
-    return { customer: res.customer, totals: res.totals, logs: res.logs };
-  }
-  /** Wallet / credit / outcome / unit balances. `GET …/:id/balances`. */
-  balances(id) {
-    return this.transport.request({
-      method: "GET",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/balances`
-    });
-  }
-  /**
-   * One credit balance for a customer, matched by `creditId` or `creditName`;
-   * `null` when the customer has no plan or no matching credit. Convenience
-   * over `balances()` + `Array.find` — it fetches the FULL balances under the
-   * hood (there is no server-side scoped read), so prefer `balances()` when you
-   * need several rows from the same customer.
-   */
-  async creditBalance(customerId, match) {
-    const { credits } = await this.balances(customerId);
-    return credits.find(
-      (c) => match.creditId != null && c.creditId === match.creditId || match.creditName != null && c.creditName === match.creditName
-    ) ?? null;
-  }
-  /** One outcome balance for a customer, matched by `outcomeId` or
-   *  `outcomeName`; `null` when absent. See {@link creditBalance} for the
-   *  fetch-then-filter caveat. */
-  async outcomeBalance(customerId, match) {
-    const { outcomes } = await this.balances(customerId);
-    return outcomes.find(
-      (o) => match.outcomeId != null && o.outcomeId === match.outcomeId || match.outcomeName != null && o.outcomeName === match.outcomeName
-    ) ?? null;
-  }
-  /** One unit balance for a customer, matched by `unitId` or `unitName`;
-   *  `null` when absent. See {@link creditBalance} for the fetch-then-filter
-   *  caveat. */
-  async unitBalance(customerId, match) {
-    const { units } = await this.balances(customerId);
-    return units.find(
-      (u) => match.unitId != null && u.unitId === match.unitId || match.unitName != null && u.unitName === match.unitName
-    ) ?? null;
-  }
-  /** The customer's current plan. `GET …/:id/plan`. */
-  plan(id) {
-    return this.transport.request({
-      method: "GET",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/plan`
-    });
-  }
-  // --- Members -------------------------------------------------------------
-  /** List a customer's members. `GET …/:id/members`. */
-  async listMembers(id) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/members`
-    });
-    return res.members;
-  }
-  /** Add a member to a customer. Duplicate `email` → ConflictError. */
-  async addMember(id, input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/members`,
-      body: input
-    });
-    return res.member;
-  }
-  /** Update a member's profile. Duplicate `email` → ConflictError. `PATCH …/:id/members/:memberId`. */
-  async updateMember(id, memberId, input) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
-      body: input
-    });
-    return res.member;
-  }
-  /** Remove a member from a customer, returning who was removed. `DELETE …/:id/members/:memberId`. */
-  async removeMember(id, memberId) {
-    const res = await this.transport.request({
-      method: "DELETE",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`
-    });
-    return res.member;
-  }
-  // --- Wallet & billing config --------------------------------------------
-  /** The customer's wallet balance + transactions. `GET …/:id/wallet`. */
-  wallet(id, params = {}) {
-    return this.transport.request({
-      method: "GET",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/wallet`,
-      query: { limit: params.limit }
-    });
-  }
-  /**
-   * Record a manual wallet entry (top-up or deduction). `amount` is always
-   * positive; the sign comes from `type`. `POST …/:id/wallet`.
-   */
-  async addWalletEntry(id, input) {
-    return this.transport.request({
-      method: "POST",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/wallet`,
-      body: input
-    });
-  }
-  // Note: a customer's currency is set through `update(id, { currencyCode })`
-  // (PATCH …/:id) — there is no separate currency endpoint. Credit-type
-  // assignment has no public API.
-  // --- Balance adjustments -------------------------------------------------
-  /** Grant or claw back a credit balance. `POST …/:id/credits/adjust`. */
-  async adjustCredit(id, input) {
-    await this.transport.request({
-      method: "POST",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/credits/adjust`,
-      body: input
-    });
-  }
-  /** Grant or claw back an outcome balance. Returns the remaining balance. */
-  async adjustOutcome(id, input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/outcomes/adjust`,
-      body: input
-    });
-    return { remaining: res.remaining };
-  }
-  /** Grant or claw back a unit balance. Returns the remaining balance. */
-  async adjustUnit(id, input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: `/api/v1/customers/${encodeURIComponent(id)}/units/adjust`,
-      body: input
-    });
-    return { remaining: res.remaining };
-  }
-};
-var Invoices = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** List invoices, most-recent first. Filter by customer and/or status. */
-  async list(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/invoices",
-      query: {
-        customerId: params.customerId,
-        status: params.status,
-        limit: params.limit
-      }
-    });
-    return res.invoices;
-  }
-  /** Fetch one full invoice + its plan snapshot. `GET /api/v1/invoices/:id`. */
-  get(id) {
-    return this.transport.request({
-      method: "GET",
-      path: `/api/v1/invoices/${encodeURIComponent(id)}`
-    });
-  }
-  /**
-   * Mint a hosted pay link for an OPEN invoice. PAID/VOID invoices are rejected
-   * with a `ConflictError`. `GET /api/v1/invoices/:id/pay-link`.
-   */
-  payLink(id) {
-    return this.transport.request({
-      method: "GET",
-      path: `/api/v1/invoices/${encodeURIComponent(id)}/pay-link`
-    });
-  }
-};
-var Outcomes = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** List outcome types. Pass `{ active: true }` to only return active ones. */
-  async list(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/outcomes",
-      query: { active: params.active === void 0 ? void 0 : String(params.active) }
-    });
-    return res.outcomes;
-  }
-  /** Create an outcome type with its steps. `POST /api/v1/outcomes`. */
-  async create(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: "/api/v1/outcomes",
-      body: input
-    });
-    return res.outcome;
-  }
-  /** Fetch one outcome type with steps + stats. `GET /api/v1/outcomes/:id`. */
-  async get(id) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: `/api/v1/outcomes/${encodeURIComponent(id)}`
-    });
-    return res.outcome;
-  }
-  /** Update an outcome type's definition. `PATCH /api/v1/outcomes/:id`. */
-  async update(id, input) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/outcomes/${encodeURIComponent(id)}`,
-      body: input
-    });
-    return res.outcome;
-  }
-  /** Activate or deactivate an outcome type; returns the updated outcome. */
-  async setActive(id, isActive) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/outcomes/${encodeURIComponent(id)}`,
-      body: { isActive }
-    });
-    return res.outcome;
-  }
-  /** Delete an outcome type. */
-  async delete(id) {
-    await this.transport.request({
-      method: "DELETE",
-      path: `/api/v1/outcomes/${encodeURIComponent(id)}`
-    });
-  }
-};
-var Payments = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** List payments (paid invoices), most-recent first. Filter by customer. */
-  async list(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/payments",
-      query: { customerId: params.customerId, limit: params.limit }
-    });
-    return res.payments;
-  }
-  /** Fetch one payment + its plan snapshot. `GET /api/v1/payments/:id`. */
-  get(id) {
-    return this.transport.request({
-      method: "GET",
-      path: `/api/v1/payments/${encodeURIComponent(id)}`
-    });
-  }
-};
-var Plans = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** List plans, oldest-first. Pass `{ active: true }` to only return active plans. */
-  async list(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/plans",
-      query: { active: params.active === void 0 ? void 0 : String(params.active) }
-    });
-    return res.plans;
-  }
-  /** Create a plan. `POST /api/v1/plans`. */
-  async create(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: "/api/v1/plans",
-      body: input
-    });
-    return res.plan;
-  }
-  /** Fetch one plan with aggregate subscriber/invoice stats. `GET /api/v1/plans/:id`. */
-  async get(id) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: `/api/v1/plans/${encodeURIComponent(id)}`
-    });
-    return res.plan;
-  }
-  /** Replace a plan's definition (components + settings). `PATCH /api/v1/plans/:id`. */
-  async update(id, input) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/plans/${encodeURIComponent(id)}`,
-      body: input
-    });
-    return res.plan;
-  }
-  /** Activate or deactivate a plan without rewriting it. */
-  async setActive(id, isActive) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/plans/${encodeURIComponent(id)}`,
-      body: { isActive }
-    });
-    return res.plan;
-  }
-  /** Delete a plan. Refused once any customer has purchased it. */
-  async delete(id) {
-    await this.transport.request({
-      method: "DELETE",
-      path: `/api/v1/plans/${encodeURIComponent(id)}`
-    });
-  }
-};
-var Portal = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  async createToken(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: "/api/v1/portal/token",
-      body: {
-        customerId: input.customerId,
-        ttlSeconds: input.ttlSeconds,
-        memberEmail: input.memberEmail
-      }
-    });
-    return {
-      token: res.token,
-      expiresAt: res.expiresAt,
-      expiresIn: res.expiresIn
-    };
-  }
-};
-var Purchases = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** List purchases, most-recent first. Filter by customer and/or status. */
-  async list(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/purchases",
-      query: {
-        customerId: params.customerId,
-        status: params.status,
-        limit: params.limit
-      }
-    });
-    return res.purchases;
-  }
-  /** Subscribe a customer to a plan. `POST /api/v1/purchases`. */
-  async create(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: "/api/v1/purchases",
-      body: input
-    });
-    return res.purchase;
-  }
-  /** Fetch one purchase. `GET /api/v1/purchases/:id`. */
-  async get(id) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: `/api/v1/purchases/${encodeURIComponent(id)}`
-    });
-    return res.purchase;
-  }
-  /**
-   * Turn automatic billing on or off for a purchase. When pausing, an optional
-   * `pauseReason` is recorded. `PATCH /api/v1/purchases/:id`.
-   */
-  async setAutoPayment(id, autoPayment, opts = {}) {
-    return this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/purchases/${encodeURIComponent(id)}`,
-      body: { autoPayment, pauseReason: opts.pauseReason }
-    });
-  }
-  /** Cancel a purchase (voids any open invoice). `POST /api/v1/purchases/:id/cancel`. */
-  async cancel(id) {
-    await this.transport.request({
-      method: "POST",
-      path: `/api/v1/purchases/${encodeURIComponent(id)}/cancel`
-    });
-  }
-};
-function newKey() {
-  const c = globalThis.crypto;
-  if (typeof c?.randomUUID === "function") return c.randomUUID();
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
-    const r = Math.random() * 16 | 0;
-    const v = ch === "x" ? r : r & 3 | 8;
-    return v.toString(16);
-  });
-}
-var SIGNAL_PATHS = {
-  credit: "/api/v1/signal/credit",
-  outcome: "/api/v1/signal/outcome",
-  wallet: "/api/v1/signal/wallet"
-};
-var UNIT_PATH = "/api/v1/signal/unit";
-var COMPOSITE_COMPLETE_PATH = "/api/v1/signal/composite/complete";
-function signalToWire(signal) {
-  const t = signal.tokens;
-  const body = {
-    customerId: signal.customerId,
-    // `usage` is required on all three model-priced kinds. input/output are
-    // always sent; `cacheTokens` only when provided (the server defaults 0).
-    usage: {
-      model: signal.model,
-      inputTokens: t.input,
-      outputTokens: t.output,
-      ...t.cache != null ? { cacheTokens: t.cache } : {}
+  // --- Workspace -----------------------------------------------------------
+  workspace = {
+    /** `GET /api/v1/me` — the organisation behind the key, sandbox or live. */
+    me: () => {
+      return this.request({ method: "GET", path: "/api/v1/me" });
+    },
+    /** `GET /api/v1/models` — the organisation's enabled models with prices. */
+    models: async (params = {}) => {
+      const result = await this.request({
+        method: "GET",
+        path: "/api/v1/models",
+        query: activeQuery(params)
+      });
+      return result.models;
+    },
+    /** `POST /api/v1/models` — enable a catalog model, autopriced. */
+    addModel: (input) => {
+      return this.request({ method: "POST", path: "/api/v1/models", body: input });
     }
   };
-  if (signal.member) body.member = signal.member;
-  if (signal.custom) body.custom = signal.custom;
-  if (signal.type === "credit" || signal.type === "outcome") {
-    body.agentKey = signal.agentKey;
-  }
-  if (signal.type === "outcome") {
-    body.runId = signal.runId;
-    if (signal.complete != null) body.complete = signal.complete;
-  }
-  if (signal.type !== "wallet" && signal.composite) {
-    body.composite = { [signal.composite.ref]: signal.composite.value };
-  }
-  if (signal.idempotencyKey) body.idempotencyKey = signal.idempotencyKey;
-  return body;
-}
-function handles(res) {
-  return {
-    ...res.messageId != null ? { messageId: res.messageId } : {},
-    ...res.rawId != null ? { rawId: res.rawId } : {}
-  };
-}
-var Signals = class {
-  constructor(transport, flusher, cfg) {
-    this.transport = transport;
-    this.flusher = flusher;
-    this.cfg = cfg;
-  }
-  transport;
-  flusher;
-  cfg;
+  // --- Catalogue: credits / outcomes / units / plans -----------------------
+  credits = this.catalogue("/api/v1/credits", "credits", "credit");
+  outcomes = this.catalogue("/api/v1/outcomes", "outcomes", "outcome");
+  units = this.catalogue("/api/v1/units-catalog", "units", "unit");
+  plans = this.catalogue("/api/v1/plans", "plans", "plan");
   /**
-   * Record one usage signal, to the route its `type` selects:
-   * `POST /api/v1/signal/credit` | `/signal/outcome` | `/signal/wallet`.
-   *
-   * Returns as soon as the signal is buffered (async mode) or the request has
-   * been answered (`{ wait: true }` / sync mode). See {@link TrackResult}: a
-   * resolved promise means "accepted", which is not the same as "billed".
+   * The same five calls for every catalogue resource. `listKey` / `itemKey`
+   * are the fields the server nests the result under, e.g. `{ credits: [...] }`
+   * for a list and `{ credit: {...} }` for one item.
    */
-  async track(signal, opts = {}) {
-    const body = signalToWire(signal);
-    if (body.idempotencyKey == null) body.idempotencyKey = newKey();
-    const path = SIGNAL_PATHS[signal.type];
-    const sendNow = opts.wait || this.cfg.mode === "sync";
-    if (!sendNow) {
-      this.flusher.enqueue({ path, body, signal });
-      return { queued: true };
-    }
-    const res = await this.transport.request({
-      method: "POST",
-      path,
-      body,
-      // Best-effort metering opts into retries on transient failures.
-      retry: true
-    });
+  catalogue(basePath, listKey, itemKey) {
     return {
-      queued: res.queued === true,
-      usageLog: res.usageLog ?? null,
-      ...handles(res)
-    };
-  }
-  /** Meter a named credit. `POST /api/v1/signal/credit`. */
-  credit(input, opts) {
-    return this.track({ ...input, type: "credit" }, opts);
-  }
-  /** Debit the customer's wallet at model cost. `POST /api/v1/signal/wallet`. */
-  wallet(input, opts) {
-    return this.track({ ...input, type: "wallet" }, opts);
-  }
-  /** Advance one step of an outcome workflow. `POST /api/v1/signal/outcome`. */
-  outcome(input, opts) {
-    return this.track({ ...input, type: "outcome" }, opts);
-  }
-  /**
-   * Recent usage logs + totals for a customer. `GET /api/v1/usage`.
-   *
-   * Still the legacy path, deliberately. The `/api/v1/signal/*` family is
-   * POST-only — it replaced how usage is INGESTED, not how it is read — so
-   * `GET /api/v1/usage` has no successor and is not deprecated. It is also the
-   * only way to prove a signal landed, which matters more now that ingestion
-   * answers `202` for everything.
-   */
-  async list(params) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/usage",
-      query: { customerId: params.customerId, limit: params.limit }
-    });
-    return { customer: res.customer, totals: res.totals, logs: res.logs };
-  }
-  /**
-   * Record one unit-metered event (a fixed-price meter with no tokens),
-   * addressed to a catalog unit by its `agentKey`. Sent immediately — unit
-   * events are not buffered. `POST /api/v1/signal/unit`.
-   *
-   * Two things changed with the move off `POST /api/v1/units`, and both show up
-   * in the return type. The route is now durable (the report lands in an inbox
-   * before it is priced, so a failure parks as Pending and can be retried
-   * instead of losing a billable event) and it answers `202` when it queues —
-   * so this resolves {@link UnitTrackResult}, not a bare `{ unitUsage }`.
-   * Branch on `queued`.
-   */
-  async unit(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: UNIT_PATH,
-      body: {
-        customerId: input.customerId,
-        agentKey: input.agentKey,
-        ...input.quantity != null ? { quantity: input.quantity } : {},
-        ...input.member ? { member: input.member } : {},
-        ...input.composite ? { composite: { [input.composite.ref]: input.composite.value } } : {},
-        // Assigned HERE, before the send, so the SAME key rides every
-        // transport-level retry below. Without it a single 500 followed by a
-        // success is TWO un-keyed reports, and the server dedups on the key —
-        // so it bills the allowance down twice, up to `retry.maxAttempts`
-        // times. The route gained idempotency precisely to stop that; not
-        // using it by default would leave the double-charge reachable from the
-        // client instead of the server.
-        idempotencyKey: input.idempotencyKey ?? newKey()
+      /** `GET <base>` — every row, or only active ones with `{ active: true }`. */
+      list: async (params = {}) => {
+        const result = await this.request({
+          method: "GET",
+          path: basePath,
+          query: activeQuery(params)
+        });
+        return result[listKey] ?? [];
       },
-      // Best-effort metering opts into retries on transient failures.
-      retry: true
-    });
-    return {
-      queued: res.queued === true,
-      unitUsage: res.unitUsage ?? null,
-      ...handles(res)
-    };
-  }
-  /**
-   * Close ONE occurrence of a composite — a distinct tag value.
-   * `POST /api/v1/signal/composite/complete`.
-   *
-   * A composite bundles several credits / outcomes / units and is billed as one
-   * thing. The occurrence opens on the first tagged signal and costs nothing;
-   * this call is the moment it is billed. Only your code knows when the
-   * workflow ended, so this is a DECLARATION, not a hint: tagged signals may
-   * arrive in any order and the occurrence stays open and unbilled until you
-   * say otherwise. Put it on the line before your own `return`.
-   *
-   * An OUTCOME never needs this — its own `complete: true` closes its run and
-   * the matching occurrence together. Credits and units have no "done" signal
-   * of their own, so this is theirs.
-   *
-   * Closing twice is safe: the second call answers `ALREADY_COMPLETED` and
-   * cannot bill again. Calling it EARLY is also safe — before every entitlement
-   * the composite is restricted to has reported, or while an ADVANCE pool is
-   * full — the server parks the ping and applies it when the blocker clears,
-   * rather than failing it.
-   */
-  async completeComposite(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: COMPOSITE_COMPLETE_PATH,
-      body: {
-        customerId: input.customerId,
-        composite: { [input.composite.ref]: input.composite.value },
-        // Auto-assigned like the others. A retry here could not double-BILL
-        // even without it — closing a closed occurrence is a server-side
-        // no-op — but that safety comes from occurrence-level dedup, not from
-        // idempotency, and an un-keyed replay still writes a redundant inbox
-        // row. Keying it collapses the retry into the one attempt it is.
-        idempotencyKey: input.idempotencyKey ?? newKey()
+      /** `GET <base>/:id`. */
+      get: async (id) => {
+        const result = await this.request({
+          method: "GET",
+          path: idPath(basePath, id)
+        });
+        return result[itemKey];
       },
-      retry: true
-    });
-    return {
-      queued: res.queued === true,
-      ...res.status != null ? { status: res.status } : {},
-      ...res.composite !== void 0 ? { composite: res.composite } : {},
-      ...res.value !== void 0 ? { value: res.value } : {},
-      ...handles(res)
-    };
-  }
-  /**
-   * A customer's unit balances + recent unit events. `GET /api/v1/units`.
-   *
-   * Legacy path for the same reason as {@link list}: the signal family is
-   * POST-only, so the read side has no successor and is not deprecated.
-   */
-  unitUsage(params) {
-    return this.transport.request({
-      method: "GET",
-      path: "/api/v1/units",
-      query: { customerId: params.customerId, limit: params.limit }
-    });
-  }
-};
-var Units = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** List unit types. Pass `{ active: true }` to only return active ones. */
-  async list(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/units-catalog",
-      query: { active: params.active === void 0 ? void 0 : String(params.active) }
-    });
-    return res.units;
-  }
-  /** Create a unit type. `POST /api/v1/units-catalog`. */
-  async create(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: "/api/v1/units-catalog",
-      body: input
-    });
-    return res.unit;
-  }
-  /** Fetch one unit type with stats. `GET /api/v1/units-catalog/:id`. */
-  async get(id) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: `/api/v1/units-catalog/${encodeURIComponent(id)}`
-    });
-    return res.unit;
-  }
-  /** Update a unit type's definition. `PATCH /api/v1/units-catalog/:id`. */
-  async update(id, input) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/units-catalog/${encodeURIComponent(id)}`,
-      body: input
-    });
-    return res.unit;
-  }
-  /** Activate or deactivate a unit type. */
-  async setActive(id, isActive) {
-    const res = await this.transport.request({
-      method: "PATCH",
-      path: `/api/v1/units-catalog/${encodeURIComponent(id)}`,
-      body: { isActive }
-    });
-    return res.unit;
-  }
-  /** Delete a unit type. */
-  async delete(id) {
-    await this.transport.request({
-      method: "DELETE",
-      path: `/api/v1/units-catalog/${encodeURIComponent(id)}`
-    });
-  }
-};
-var Webhooks = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** List configured webhooks. `GET /api/v1/webhooks`. */
-  async list() {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/webhooks"
-    });
-    return res.webhooks;
-  }
-  /** Create or replace the webhook for a kind. `POST /api/v1/webhooks`. */
-  async upsert(input) {
-    const res = await this.transport.request({
-      method: "POST",
-      path: "/api/v1/webhooks",
-      body: input
-    });
-    return res.webhook;
-  }
-  /** Delete the webhook for a kind (idempotent). `DELETE /api/v1/webhooks/:kind`. */
-  async delete(kind) {
-    await this.transport.request({
-      method: "DELETE",
-      path: `/api/v1/webhooks/${encodeURIComponent(kind)}`
-    });
-  }
-};
-var Workspace = class {
-  constructor(transport) {
-    this.transport = transport;
-  }
-  transport;
-  /** Identify the org + key behind the request, incl. `sandbox` | `live`. */
-  me() {
-    return this.transport.request({
-      method: "GET",
-      path: "/api/v1/me"
-    });
-  }
-  /** The org's enabled models with live prices. `{ active: true }` returns only
-   *  the models that can be metered right now. */
-  async models(params = {}) {
-    const res = await this.transport.request({
-      method: "GET",
-      path: "/api/v1/models",
-      query: {
-        active: params.active === void 0 ? void 0 : String(params.active)
+      /** `POST <base>`. */
+      create: async (input) => {
+        const result = await this.request({
+          method: "POST",
+          path: basePath,
+          body: input
+        });
+        return result[itemKey];
+      },
+      /** `PATCH <base>/:id` — a full rewrite, not a patch. */
+      update: async (id, input) => {
+        const result = await this.request({
+          method: "PATCH",
+          path: idPath(basePath, id),
+          body: input
+        });
+        return result[itemKey];
+      },
+      /** `PATCH <base>/:id` with only `{ isActive }` — archive / unarchive. */
+      setActive: async (id, isActive) => {
+        const result = await this.request({
+          method: "PATCH",
+          path: idPath(basePath, id),
+          body: { isActive }
+        });
+        return result[itemKey];
       }
-    });
-    return res.models;
+    };
   }
-};
-var ClockNext = class {
-  /** Record + read usage signals (credit / wallet / outcome / unit). */
-  signals;
-  /** Manage customers, their members, wallet, and balances. */
-  customers;
-  /** Define and manage billing plans. */
-  plans;
-  /** Subscribe customers to plans (purchases). */
-  purchases;
-  /** Read invoices and mint hosted pay links. */
-  invoices;
-  /** Read payments (paid invoices). */
-  payments;
-  /** Manage the credit-type catalog. */
-  credits;
-  /** Manage the composite catalog — bundles billed as one thing. */
-  composites;
-  /** Manage the outcome-type catalog. */
-  outcomes;
-  /** Manage the unit-type catalog. */
-  units;
-  /** Configure threshold webhooks. */
-  webhooks;
-  /** Mint customer-portal embed tokens. */
-  portal;
-  /** Identify the workspace (sandbox/live) + list its models. `/me`, `/models`. */
-  workspace;
-  cfg;
-  flusher;
-  constructor(config2) {
-    this.cfg = resolveConfig(config2);
-    if (typeof window !== "undefined") {
-      this.cfg.logger.warn?.(
-        "[clocknext] Running in a browser exposes your secret API key. Use this SDK only on a server/backend."
-      );
+  // --- Composites (list + create only; there is no update or archive) ------
+  composites = {
+    /** `GET /api/v1/composites`. */
+    list: async (params = {}) => {
+      const result = await this.request({
+        method: "GET",
+        path: "/api/v1/composites",
+        query: activeQuery(params)
+      });
+      return result.composites;
+    },
+    /** `POST /api/v1/composites`. */
+    create: async (input) => {
+      const result = await this.request({
+        method: "POST",
+        path: "/api/v1/composites",
+        body: input
+      });
+      return result.composite;
     }
-    const transport = new Transport(this.cfg);
-    this.flusher = new Flusher(transport, this.cfg);
-    this.signals = new Signals(transport, this.flusher, this.cfg);
-    this.customers = new Customers(transport);
-    this.plans = new Plans(transport);
-    this.purchases = new Purchases(transport);
-    this.invoices = new Invoices(transport);
-    this.payments = new Payments(transport);
-    this.credits = new Credits(transport);
-    this.composites = new Composites(transport);
-    this.outcomes = new Outcomes(transport);
-    this.units = new Units(transport);
-    this.webhooks = new Webhooks(transport);
-    this.portal = new Portal(transport);
-    this.workspace = new Workspace(transport);
-  }
-  /** Number of signals currently buffered (async mode). */
-  get pending() {
-    return this.flusher.size;
-  }
-  /** Force-send all buffered signals now. Await before a serverless return. */
-  flush() {
-    return this.flusher.flush();
-  }
-  /** Flush and stop the background timer. Call on graceful shutdown. */
-  close() {
-    return this.flusher.close();
-  }
+  };
+  // --- Customers ------------------------------------------------------------
+  customers = {
+    /** `POST /api/v1/customers`. */
+    create: async (input) => {
+      const result = await this.request({
+        method: "POST",
+        path: "/api/v1/customers",
+        body: input
+      });
+      return result.customer;
+    },
+    /** `GET /api/v1/customers/:id`. */
+    get: async (id) => {
+      const result = await this.request({
+        method: "GET",
+        path: idPath("/api/v1/customers", id)
+      });
+      return result.customer;
+    },
+    /** `GET /api/v1/customers` — one cursor page. */
+    list: async (params = {}) => {
+      const result = await this.request({
+        method: "GET",
+        path: "/api/v1/customers",
+        query: { limit: params.limit, q: params.q, cursor: params.cursor }
+      });
+      return { customers: result.customers, nextCursor: result.nextCursor };
+    },
+    /** `GET /api/v1/usage?customerId=` — recent usage logs + totals. */
+    usage: async (id, params = {}) => {
+      const result = await this.request({
+        method: "GET",
+        path: "/api/v1/usage",
+        query: { customerId: id, limit: params.limit }
+      });
+      return { customer: result.customer, totals: result.totals, logs: result.logs };
+    },
+    /** `GET /api/v1/customers/:id/balances`. */
+    balances: (id) => {
+      return this.request({ method: "GET", path: `${idPath("/api/v1/customers", id)}/balances` });
+    },
+    /** `GET /api/v1/customers/:id/plan`. */
+    plan: (id) => {
+      return this.request({ method: "GET", path: `${idPath("/api/v1/customers", id)}/plan` });
+    },
+    /** `POST /api/v1/customers/bulk` — up to 200 customers, one result per row. */
+    bulkCreate: (customers) => {
+      return this.request({
+        method: "POST",
+        path: "/api/v1/customers/bulk",
+        body: { customers },
+        timeoutMs: 6e4
+        // one batch request; allow headroom
+      });
+    }
+  };
+  // --- Purchases -------------------------------------------------------------
+  purchases = {
+    /** `POST /api/v1/purchases` — subscribe a customer to a plan. */
+    create: async (input) => {
+      const result = await this.request({
+        method: "POST",
+        path: "/api/v1/purchases",
+        body: input
+      });
+      return result.purchase;
+    }
+  };
 };
 
 // src/client.ts
@@ -22395,7 +21546,7 @@ function makeClient() {
     );
   }
   const baseUrl = process.env.CLOCKNEXT_BASE_URL;
-  return new ClockNext({ apiKey, ...baseUrl ? { baseUrl } : {} });
+  return new ClockNextApi({ apiKey, ...baseUrl ? { baseUrl } : {} });
 }
 
 // src/tools/util.ts
@@ -22418,7 +21569,6 @@ function errMsg(err) {
 }
 
 // src/tools/add-model.ts
-var DEFAULT_BASE = "https://payments.clocknext.com";
 function registerAddModel(server, cnk) {
   server.registerTool(
     "clocknext_add_model",
@@ -22443,30 +21593,23 @@ function registerAddModel(server, cnk) {
       annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true }
     },
     async ({ provider, model }) => {
-      const apiKey = process.env.CLOCKNEXT_API_KEY;
-      if (!apiKey) {
-        return errorResult("CLOCKNEXT_API_KEY is not set \u2014 cannot add a model.");
-      }
-      const base = (process.env.CLOCKNEXT_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
-      const modelsPage = `${base}/settings/models`;
+      const modelsPage = `${cnk.origin}/settings/models`;
       try {
-        const res = await fetch(new URL("/api/v1/models", base), {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            accept: "application/json",
-            authorization: `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({ provider, modelId: model, pricingMode: "AUTO" }),
-          signal: AbortSignal.timeout(1e4)
-        });
-        const json = await res.json().catch(() => ({}));
-        const reason = json.statusDetail?.message || json.error || json.message || `HTTP ${res.status}`;
-        const alreadyEnabled = /already enabled/i.test(reason);
-        if (!res.ok && !alreadyEnabled) {
-          return errorResult(
-            `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. Browse the addable catalog on the Models page (${modelsPage}); clocknext_list_models only shows what's already enabled.`
-          );
+        let alreadyEnabled = false;
+        try {
+          await cnk.workspace.addModel({ provider, modelId: model, pricingMode: "AUTO" });
+        } catch (err) {
+          const serverAnswered = err instanceof ClockNextError && err.status !== void 0;
+          if (!serverAnswered) {
+            throw err;
+          }
+          const reason = err.message;
+          alreadyEnabled = /already enabled/i.test(reason);
+          if (!alreadyEnabled) {
+            return errorResult(
+              `Couldn't add "${provider}/${model}": ${reason}. ClockNext only meters models in its pricing catalog, so a model or provider that isn't in the catalog can't be added or priced here. Browse the addable catalog on the Models page (${modelsPage}); clocknext_list_models only shows what's already enabled.`
+            );
+          }
         }
         const added = await cnk.workspace.models({}).then((list) => list.find((m) => m.modelId.toLowerCase() === model.toLowerCase())).catch(() => void 0);
         const unpriced = added != null && added.inputPrice === 0 && added.outputPrice === 0 && added.cachePrice === 0;
@@ -23282,30 +22425,8 @@ function registerCustomerTools(server, cnk) {
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true }
     },
     async ({ customers }) => {
-      const apiKey = process.env.CLOCKNEXT_API_KEY;
-      if (!apiKey) {
-        return errorResult("CLOCKNEXT_API_KEY is not set \u2014 cannot import customers.");
-      }
-      const base = (process.env.CLOCKNEXT_BASE_URL || "https://payments.clocknext.com").replace(/\/+$/, "");
       try {
-        const res = await fetch(new URL("/api/v1/customers/bulk", base), {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            accept: "application/json",
-            authorization: `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({ customers }),
-          signal: AbortSignal.timeout(6e4)
-          // one batch request; allow headroom
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          return errorResult(
-            json.statusDetail?.message || json.error || json.message || `HTTP ${res.status} on bulk import.`
-          );
-        }
-        return jsonResult(json.result ?? json);
+        return jsonResult(await cnk.customers.bulkCreate(customers));
       } catch (err) {
         return errorResult(errMsg(err));
       }

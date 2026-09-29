@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ClockNext } from "@clocknext/sdk";
+import type { ClockNextApi } from "../api";
 import { z } from "zod";
 import { errMsg, errorResult, jsonResult } from "./util";
 
-export function registerListModels(server: McpServer, cnk: ClockNext): void {
+export function registerListModels(server: McpServer, cnk: ClockNextApi): void {
   server.registerTool(
     "clocknext_list_models",
     {

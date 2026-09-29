@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ClockNext } from "@clocknext/sdk";
+import type { ClockNextApi } from "../api";
 import { errMsg, errorResult, jsonResult } from "./util";
 
-export function registerWhoami(server: McpServer, cnk: ClockNext): void {
+export function registerWhoami(server: McpServer, cnk: ClockNextApi): void {
   server.registerTool(
     "clocknext_whoami",
     {

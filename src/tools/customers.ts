@@ -1,16 +1,12 @@
 import { z } from "zod";
-import type {
-  ClockNext,
-  CreateCustomerInput,
-  CreatePurchaseInput,
-} from "@clocknext/sdk";
+import type { ClockNextApi } from "../api";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { errMsg, errorResult, jsonResult } from "./util";
 
 /**
  * Customer tools — create/read customers, subscribe them to a plan (purchase),
- * read a customer's usage / balances / current plan, and a bulk import. These wrap
- * existing @clocknext/sdk methods (no server change needed). They power the
+ * read a customer's usage / balances / current plan, and a bulk import. They go
+ * through the MCP's own API client (`src/api.ts`). They power the
  * clocknext-setup-billing skill's "dummy customer + test signal + confirm it landed"
  * step and the clocknext-customer-mapping / bulk-import skills.
  */
@@ -43,7 +39,7 @@ const customerFields = {
 
 const customerObject = z.object(customerFields);
 
-export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
+export function registerCustomerTools(server: McpServer, cnk: ClockNextApi): void {
   server.registerTool(
     "clocknext_create_customer",
     {
@@ -60,7 +56,7 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
     },
     async (args) => {
       try {
-        return jsonResult(await cnk.customers.create(args as CreateCustomerInput));
+        return jsonResult(await cnk.customers.create(args));
       } catch (err) {
         return errorResult(errMsg(err));
       }
@@ -204,7 +200,7 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
     },
     async (args) => {
       try {
-        return jsonResult(await cnk.purchases.create(args as CreatePurchaseInput));
+        return jsonResult(await cnk.purchases.create(args));
       } catch (err) {
         return errorResult(errMsg(err));
       }
@@ -233,39 +229,8 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNext): void {
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ customers }) => {
-      const apiKey = process.env.CLOCKNEXT_API_KEY;
-      if (!apiKey) {
-        return errorResult("CLOCKNEXT_API_KEY is not set — cannot import customers.");
-      }
-      const base = (
-        process.env.CLOCKNEXT_BASE_URL || "https://payments.clocknext.com"
-      ).replace(/\/+$/, "");
       try {
-        const res = await fetch(new URL("/api/v1/customers/bulk", base), {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            accept: "application/json",
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ customers }),
-          signal: AbortSignal.timeout(60_000), // one batch request; allow headroom
-        });
-        const json = (await res.json().catch(() => ({}))) as {
-          result?: unknown;
-          error?: string;
-          message?: string;
-          statusDetail?: { message?: string };
-        };
-        if (!res.ok) {
-          return errorResult(
-            json.statusDetail?.message ||
-              json.error ||
-              json.message ||
-              `HTTP ${res.status} on bulk import.`,
-          );
-        }
-        return jsonResult(json.result ?? json);
+        return jsonResult(await cnk.customers.bulkCreate(customers));
       } catch (err) {
         return errorResult(errMsg(err));
       }
