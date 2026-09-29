@@ -22730,7 +22730,7 @@ function registerWriteEnv(server) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.10.2" });
+  const server = new McpServer({ name: "clocknext", version: "0.11.0" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerSearchDocs(server);
