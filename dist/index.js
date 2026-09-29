@@ -21530,7 +21530,11 @@ var ClockNextApi = class {
       const result = await this.request({
         method: "POST",
         path: "/api/v1/purchases",
-        body: input
+        body: input,
+        // Creating a purchase raises the first invoice and can take ~10s. A
+        // timeout here would report failure for a purchase that DID go
+        // through, inviting a retry that bills twice — so allow headroom.
+        timeoutMs: 6e4
       });
       return result.purchase;
     }
