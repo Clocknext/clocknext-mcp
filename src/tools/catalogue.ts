@@ -38,20 +38,57 @@ const mixerLine = z
       .number()
       .positive()
       .describe("Average TOTAL tokens per credit / per step (input + output + cache combined)."),
-    inputPct: z.number().min(0).max(100).describe("Percent of avgTokens that are input tokens."),
-    outputPct: z.number().min(0).max(100).describe("Percent that are output tokens."),
+    inputPct: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .describe("Percent of avgTokens that are input tokens (whole number)."),
+    outputPct: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .describe("Percent that are output tokens (whole number)."),
     cachePct: z
       .number()
+      .int()
       .min(0)
       .max(100)
       .default(0)
-      .describe("Percent that are cache tokens. Default 0."),
+      .describe("Percent that are cache tokens (whole number). Default 0."),
   })
   .refine((l) => Math.round(l.inputPct + l.outputPct + (l.cachePct ?? 0)) === 100, {
     message: "inputPct + outputPct + cachePct must total 100.",
   });
 
 type MixerLine = { model: string; avgTokens: number; inputPct: number; outputPct: number; cachePct?: number };
+
+/**
+ * One saved line of the ClockNext product's pricing calculator — the same shape
+ * the product stores on a credit / outcome step as `modelBundle`. Sending it is
+ * what makes the calculator show the chosen models, their average tokens and
+ * the input / output / cache split when the credit is opened in the product.
+ * Without it only the computed price is saved and the calculator opens empty.
+ * `orgModelId` is the workspace's own model row id (`id` from GET /api/v1/models).
+ */
+type BundleEntry = {
+  orgModelId: string;
+  modelName: string;
+  tokens: number;
+  input: number;
+  output: number;
+  cache: number;
+};
+
+/** Total of every mixer line's average tokens — the calculator's token volume. */
+function sumTokens(lines: readonly MixerLine[]): number {
+  let total = 0;
+  for (const line of lines) {
+    total = total + line.avgTokens;
+  }
+  return Math.round(total);
+}
 
 /**
  * Compute a model-grounded base price (USD) from a mixer, using the org's LIVE
@@ -61,7 +98,10 @@ type MixerLine = { model: string; avgTokens: number; inputPct: number; outputPct
 async function computeMixerBase(
   cnk: ClockNextApi,
   lines: readonly MixerLine[],
-): Promise<{ ok: true; basePrice: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; basePrice: number; bundle: BundleEntry[] | null }
+  | { ok: false; error: string }
+> {
   let models;
   try {
     models = await cnk.workspace.models({});
@@ -71,6 +111,10 @@ async function computeMixerBase(
   const byId = new Map(models.map((m) => [m.modelId.toLowerCase(), m]));
 
   let basePrice = 0;
+  // Stays a list only while every model carries its row `id`. An older server
+  // that doesn't return `id` still gets the credit priced — just without the
+  // calculator breakdown (null), exactly as before.
+  let bundle: BundleEntry[] | null = [];
   for (const line of lines) {
     const m = byId.get(line.model.toLowerCase());
     if (!m) {
@@ -99,8 +143,21 @@ async function computeMixerBase(
       (line.outputPct / 100) * m.outputPrice +
       (cachePct / 100) * m.cachePrice;
     basePrice += (line.avgTokens * perToken) / 1_000_000;
+
+    if (bundle !== null && typeof m.id === "string" && m.id.length > 0) {
+      bundle.push({
+        orgModelId: m.id,
+        modelName: typeof m.modelName === "string" ? m.modelName : line.model,
+        tokens: line.avgTokens,
+        input: line.inputPct,
+        output: line.outputPct,
+        cache: cachePct,
+      });
+    } else {
+      bundle = null;
+    }
   }
-  return { ok: true, basePrice };
+  return { ok: true, basePrice, bundle };
 }
 
 // Plan component: flattened discriminated union. The per-type rules below are
@@ -570,7 +627,10 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
         basePrice: priced.basePrice,
         marginPercent: a.marginPercent,
         pricePerCredit: priced.basePrice * (1 + a.marginPercent / 100),
-        tokensPerCredit: a.tokensPerCredit ?? 0,
+        // Same as the product's calculator: the credit's token volume is the
+        // sum of every model line's average tokens, unless the caller set one.
+        tokensPerCredit: a.tokensPerCredit ?? sumTokens(a.models),
+        ...(priced.bundle !== null ? { modelBundle: priced.bundle } : {}),
         ...(a.description != null ? { description: a.description } : {}),
       };
     },
@@ -583,7 +643,7 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
         "Rules:",
         "- Price is model-grounded: give the `models` mixer + `marginPercent`; the tool reads live model prices and computes the base price + price-per-credit. Never hand-typed.",
         "- Enable the models you price against first (clocknext_add_model / _list_models).",
-        "- Prefer the credits builder in the ClockNext product (https://payments.clocknext.com/credits) — its live preview records the full per-model bundle; this fallback stores the computed price only.",
+        "- Prefer the credits builder in the ClockNext product (https://payments.clocknext.com/credits) — its live preview shows the price as you build it. This tool saves the same per-model mix (models, average tokens, input/output/cache split), so the credit opens with its calculator filled in.",
         "- A plan grants the credit via a CREDIT component referencing its id.",
       ].join("\n"),
       update: [
@@ -627,7 +687,12 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
         marginPercent: number;
         steps: { name: string; agentKey: string; models: MixerLine[] }[];
       };
-      const steps: { name: string; agentKey: string; basePrice: number }[] = [];
+      const steps: {
+        name: string;
+        agentKey: string;
+        basePrice: number;
+        modelBundle?: BundleEntry[];
+      }[] = [];
       let total = 0;
       for (const s of a.steps) {
         const priced = await computeMixerBase(cnk, s.models);
@@ -637,7 +702,12 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
             error: `Step "${s.name}" priced to $0 — give it real token usage, or model a fixed-cost/non-LLM event as a UNIT instead of an outcome step.`,
           };
         }
-        steps.push({ name: s.name, agentKey: s.agentKey, basePrice: priced.basePrice });
+        steps.push({
+          name: s.name,
+          agentKey: s.agentKey,
+          basePrice: priced.basePrice,
+          ...(priced.bundle !== null ? { modelBundle: priced.bundle } : {}),
+        });
         total += priced.basePrice;
       }
       return {

@@ -21651,12 +21651,19 @@ var mixerLine = external_exports.object({
     "Enabled catalog model id from clocknext_list_models (e.g. 'gpt-4o'). Grounds the price in that model's live per-1M-token cost."
   ),
   avgTokens: external_exports.number().positive().describe("Average TOTAL tokens per credit / per step (input + output + cache combined)."),
-  inputPct: external_exports.number().min(0).max(100).describe("Percent of avgTokens that are input tokens."),
-  outputPct: external_exports.number().min(0).max(100).describe("Percent that are output tokens."),
-  cachePct: external_exports.number().min(0).max(100).default(0).describe("Percent that are cache tokens. Default 0.")
+  inputPct: external_exports.number().int().min(0).max(100).describe("Percent of avgTokens that are input tokens (whole number)."),
+  outputPct: external_exports.number().int().min(0).max(100).describe("Percent that are output tokens (whole number)."),
+  cachePct: external_exports.number().int().min(0).max(100).default(0).describe("Percent that are cache tokens (whole number). Default 0.")
 }).refine((l) => Math.round(l.inputPct + l.outputPct + (l.cachePct ?? 0)) === 100, {
   message: "inputPct + outputPct + cachePct must total 100."
 });
+function sumTokens(lines) {
+  let total = 0;
+  for (const line of lines) {
+    total = total + line.avgTokens;
+  }
+  return Math.round(total);
+}
 async function computeMixerBase(cnk, lines) {
   let models;
   try {
@@ -21666,6 +21673,7 @@ async function computeMixerBase(cnk, lines) {
   }
   const byId = new Map(models.map((m) => [m.modelId.toLowerCase(), m]));
   let basePrice = 0;
+  let bundle = [];
   for (const line of lines) {
     const m = byId.get(line.model.toLowerCase());
     if (!m) {
@@ -21690,8 +21698,20 @@ async function computeMixerBase(cnk, lines) {
     }
     const perToken = line.inputPct / 100 * m.inputPrice + line.outputPct / 100 * m.outputPrice + cachePct / 100 * m.cachePrice;
     basePrice += line.avgTokens * perToken / 1e6;
+    if (bundle !== null && typeof m.id === "string" && m.id.length > 0) {
+      bundle.push({
+        orgModelId: m.id,
+        modelName: typeof m.modelName === "string" ? m.modelName : line.model,
+        tokens: line.avgTokens,
+        input: line.inputPct,
+        output: line.outputPct,
+        cache: cachePct
+      });
+    } else {
+      bundle = null;
+    }
   }
-  return { ok: true, basePrice };
+  return { ok: true, basePrice, bundle };
 }
 var planComponent = external_exports.object({
   type: external_exports.enum(["WALLET", "FLAT", "CREDIT", "OUTCOME", "UNIT", "PRICING_METRIC"]).describe(
@@ -22000,7 +22020,10 @@ function registerCatalogueTools(server, cnk) {
         basePrice: priced.basePrice,
         marginPercent: a.marginPercent,
         pricePerCredit: priced.basePrice * (1 + a.marginPercent / 100),
-        tokensPerCredit: a.tokensPerCredit ?? 0,
+        // Same as the product's calculator: the credit's token volume is the
+        // sum of every model line's average tokens, unless the caller set one.
+        tokensPerCredit: a.tokensPerCredit ?? sumTokens(a.models),
+        ...priced.bundle !== null ? { modelBundle: priced.bundle } : {},
         ...a.description != null ? { description: a.description } : {}
       };
     },
@@ -22013,7 +22036,7 @@ function registerCatalogueTools(server, cnk) {
         "Rules:",
         "- Price is model-grounded: give the `models` mixer + `marginPercent`; the tool reads live model prices and computes the base price + price-per-credit. Never hand-typed.",
         "- Enable the models you price against first (clocknext_add_model / _list_models).",
-        "- Prefer the credits builder in the ClockNext product (https://payments.clocknext.com/credits) \u2014 its live preview records the full per-model bundle; this fallback stores the computed price only.",
+        "- Prefer the credits builder in the ClockNext product (https://payments.clocknext.com/credits) \u2014 its live preview shows the price as you build it. This tool saves the same per-model mix (models, average tokens, input/output/cache split), so the credit opens with its calculator filled in.",
         "- A plan grants the credit via a CREDIT component referencing its id."
       ].join("\n"),
       update: [
@@ -22059,7 +22082,12 @@ function registerCatalogueTools(server, cnk) {
             error: `Step "${s.name}" priced to $0 \u2014 give it real token usage, or model a fixed-cost/non-LLM event as a UNIT instead of an outcome step.`
           };
         }
-        steps.push({ name: s.name, agentKey: s.agentKey, basePrice: priced.basePrice });
+        steps.push({
+          name: s.name,
+          agentKey: s.agentKey,
+          basePrice: priced.basePrice,
+          ...priced.bundle !== null ? { modelBundle: priced.bundle } : {}
+        });
         total += priced.basePrice;
       }
       return {

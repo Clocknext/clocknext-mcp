@@ -169,6 +169,9 @@ function sleep(ms: number): Promise<void> {
 
 /** One enabled model (`GET /api/v1/models`). Prices are USD per 1,000,000 tokens. */
 export interface Model {
+  /** This workspace's own row id for the model (newer servers only). */
+  id?: string;
+  modelName?: string;
   modelId: string;
   isActive: boolean;
   inputPrice: number;
