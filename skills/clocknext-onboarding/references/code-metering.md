@@ -9,8 +9,9 @@
   `POST /api/v1/signal/composite/complete` to close a composite. The meter is the PATH,
   not a `type` field in the body. (`POST /api/v1/usage` and `POST /api/v1/units` are the
   deprecated predecessors — every response from them carries `Deprecation: true`.)
-Ground the exact call shapes in the docs first: call `clocknext_search_docs kind=javascript`
-for JS/TS or `kind=api` otherwise, then call `clocknext_get_doc` for the matching result.
+Ground the exact call shapes in the docs first: call `clocknext_search_docs`, then
+`clocknext_get_doc` for the matching result. Every endpoint page has a Node.js SDK example
+(use it for JS/TS) and a cURL example (use it for any other language).
 
 ## The metering recipe — WRITE THIS, don't hand-roll a wrapper
 

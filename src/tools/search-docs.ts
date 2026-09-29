@@ -10,17 +10,16 @@ const DOCS_URL = resolveDocsUrl();
 type SearchHit = { kind: string; title: string; url: string; snippet: string };
 type SearchResponse = {
   query: string;
-  kind: string | null;
   count: number;
   results: SearchHit[];
 };
 
 const DESCRIPTION = [
-  "Search ClockNext's official documentation and get back the most relevant pages (title, URL, and a snippet). ClockNext is a usage-based billing platform: you meter product/AI usage, price it against plans and units, and bill customers for it.",
+  "Search ClockNext's API reference and get back the most relevant pages (title, URL, and a snippet). ClockNext is a usage-based billing platform: you meter product/AI usage, price it against plans and units, and bill customers for it. The API reference covers both the REST API and the Node.js SDK (`@clocknext/sdk`) — every endpoint page shows a Node.js example and a cURL example.",
   "",
   "Rules:",
   "- Prefer this over answering from memory — the docs are the source of truth and more current than training data. Search before explaining a ClockNext concept, designing an integration, or reaching for another ClockNext tool.",
-  "- Typical flow: search kind=concept to understand the task, then kind=api (or kind=javascript for a JS/TS codebase) for the exact reference you need to write code.",
+  "- Typical flow: search for the task (e.g. 'record credit usage', 'subscribe a customer to a plan'), then read the matching page with clocknext_get_doc. Use its Node.js SDK example for a JS/TS codebase and its cURL/REST example for any other language.",
 ].join("\n");
 
 export function registerSearchDocs(server: McpServer): void {
@@ -36,12 +35,6 @@ export function registerSearchDocs(server: McpServer): void {
           .describe(
             "What to look for, in natural language — e.g. 'how do I record token usage', 'create a plan with tiered pricing', 'what is a unit vs an outcome'.",
           ),
-        kind: z
-          .enum(["concept", "api", "javascript"])
-          .optional()
-          .describe(
-            "Restrict results. concept: domain / how it works — start here for unfamiliar terms. api: REST reference, any language. javascript: JS/TS SDK reference — use ONLY after confirming the target codebase is JS/TS; NEVER for Python/Go/Ruby/PHP/Rust/Java/C#. Omit to search all docs.",
-          ),
         limit: z
           .number()
           .int()
@@ -52,11 +45,10 @@ export function registerSearchDocs(server: McpServer): void {
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ query, kind, limit }) => {
+    async ({ query, limit }) => {
       try {
         const url = new URL("/api/search", DOCS_URL);
         url.searchParams.set("query", query);
-        if (kind) url.searchParams.set("kind", kind);
         if (limit) url.searchParams.set("limit", String(limit));
 
         const data = await fetchJson<SearchResponse>(url);
@@ -68,7 +60,6 @@ export function registerSearchDocs(server: McpServer): void {
 
         return jsonResult({
           query,
-          kind: kind ?? null,
           count: results.length,
           docsUrl: DOCS_URL,
           results,

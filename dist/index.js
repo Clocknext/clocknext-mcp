@@ -22499,7 +22499,7 @@ function resolveDocsUrl() {
 // src/tools/get-doc.ts
 var DOCS_URL = resolveDocsUrl();
 var DESCRIPTION = [
-  "Read the FULL contents of a single ClockNext docs page as Markdown. Use right after clocknext_search_docs: pass a result's `url` to read the whole page \u2014 endpoints, parameters, request/response fields, and code samples the search snippet leaves out.",
+  "Read the FULL contents of a single ClockNext API-reference page as Markdown. Use right after clocknext_search_docs: pass a result's `url` to read the whole page \u2014 endpoints, parameters, request/response fields, and the Node.js SDK + cURL examples the search snippet leaves out. Only API-reference pages can be read.",
   "",
   "Rules:",
   "- A search snippet is enough to CHOOSE a page, never enough to implement against \u2014 read the page when you need exact field names, types, or the request body.",
@@ -22513,7 +22513,7 @@ function registerGetDoc(server) {
       description: DESCRIPTION,
       inputSchema: {
         path: external_exports.string().min(1).describe(
-          "The `url` (or path) of a ClockNext docs page \u2014 typically taken from a clocknext_search_docs result, e.g. 'https://help.clocknext.com/docs/sdk/signals' or '/docs/api-reference/quickstart'."
+          "The `url` (or path) of a ClockNext docs page \u2014 typically taken from a clocknext_search_docs result, e.g. 'https://help.clocknext.com/docs/api-reference/signals/recordCreditSignal' or '/docs/api-reference/quickstart'."
         )
       },
       annotations: { readOnlyHint: true, openWorldHint: true }
@@ -22562,11 +22562,11 @@ function registerListModels(server, cnk) {
 // src/tools/search-docs.ts
 var DOCS_URL2 = resolveDocsUrl();
 var DESCRIPTION2 = [
-  "Search ClockNext's official documentation and get back the most relevant pages (title, URL, and a snippet). ClockNext is a usage-based billing platform: you meter product/AI usage, price it against plans and units, and bill customers for it.",
+  "Search ClockNext's API reference and get back the most relevant pages (title, URL, and a snippet). ClockNext is a usage-based billing platform: you meter product/AI usage, price it against plans and units, and bill customers for it. The API reference covers both the REST API and the Node.js SDK (`@clocknext/sdk`) \u2014 every endpoint page shows a Node.js example and a cURL example.",
   "",
   "Rules:",
   "- Prefer this over answering from memory \u2014 the docs are the source of truth and more current than training data. Search before explaining a ClockNext concept, designing an integration, or reaching for another ClockNext tool.",
-  "- Typical flow: search kind=concept to understand the task, then kind=api (or kind=javascript for a JS/TS codebase) for the exact reference you need to write code."
+  "- Typical flow: search for the task (e.g. 'record credit usage', 'subscribe a customer to a plan'), then read the matching page with clocknext_get_doc. Use its Node.js SDK example for a JS/TS codebase and its cURL/REST example for any other language."
 ].join("\n");
 function registerSearchDocs(server) {
   server.registerTool(
@@ -22578,18 +22578,14 @@ function registerSearchDocs(server) {
         query: external_exports.string().min(1).describe(
           "What to look for, in natural language \u2014 e.g. 'how do I record token usage', 'create a plan with tiered pricing', 'what is a unit vs an outcome'."
         ),
-        kind: external_exports.enum(["concept", "api", "javascript"]).optional().describe(
-          "Restrict results. concept: domain / how it works \u2014 start here for unfamiliar terms. api: REST reference, any language. javascript: JS/TS SDK reference \u2014 use ONLY after confirming the target codebase is JS/TS; NEVER for Python/Go/Ruby/PHP/Rust/Java/C#. Omit to search all docs."
-        ),
         limit: external_exports.number().int().min(1).max(20).optional().describe("Maximum number of pages to return (default 8).")
       },
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
-    async ({ query, kind, limit }) => {
+    async ({ query, limit }) => {
       try {
         const url = new URL("/api/search", DOCS_URL2);
         url.searchParams.set("query", query);
-        if (kind) url.searchParams.set("kind", kind);
         if (limit) url.searchParams.set("limit", String(limit));
         const data = await fetchJson(url);
         const results = (data.results ?? []).map((r) => ({
@@ -22599,7 +22595,6 @@ function registerSearchDocs(server) {
         }));
         return jsonResult({
           query,
-          kind: kind ?? null,
           count: results.length,
           docsUrl: DOCS_URL2,
           results

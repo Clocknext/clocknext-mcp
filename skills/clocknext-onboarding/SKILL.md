@@ -242,7 +242,7 @@ STOP until they confirm. **Not in the catalog** → it can't be metered; help pi
 supported model. Details: `references/pricing-and-models.md`.
 
 ### S7–S12 · Entitlements (loop until the user is happy)
-S7: ground in the docs first (`clocknext_search_docs kind=concept` → `clocknext_get_doc`),
+S7: ground in the docs first (`clocknext_search_docs` → `clocknext_get_doc`),
 then explain ALL FOUR types **in the product's own terms** and recommend a fit
 (`references/entitlements.md` is the decision guide; open the deep reference before
 pricing or explaining a type):

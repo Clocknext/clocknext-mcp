@@ -9,7 +9,7 @@ const DOCS_URL = resolveDocsUrl();
 type Doc = { path: string; title: string; kind: string; markdown: string };
 
 const DESCRIPTION = [
-  "Read the FULL contents of a single ClockNext docs page as Markdown. Use right after clocknext_search_docs: pass a result's `url` to read the whole page — endpoints, parameters, request/response fields, and code samples the search snippet leaves out.",
+  "Read the FULL contents of a single ClockNext API-reference page as Markdown. Use right after clocknext_search_docs: pass a result's `url` to read the whole page — endpoints, parameters, request/response fields, and the Node.js SDK + cURL examples the search snippet leaves out. Only API-reference pages can be read.",
   "",
   "Rules:",
   "- A search snippet is enough to CHOOSE a page, never enough to implement against — read the page when you need exact field names, types, or the request body.",
@@ -27,7 +27,7 @@ export function registerGetDoc(server: McpServer): void {
           .string()
           .min(1)
           .describe(
-            "The `url` (or path) of a ClockNext docs page — typically taken from a clocknext_search_docs result, e.g. 'https://help.clocknext.com/docs/sdk/signals' or '/docs/api-reference/quickstart'.",
+            "The `url` (or path) of a ClockNext docs page — typically taken from a clocknext_search_docs result, e.g. 'https://help.clocknext.com/docs/api-reference/signals/recordCreditSignal' or '/docs/api-reference/quickstart'.",
           ),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
