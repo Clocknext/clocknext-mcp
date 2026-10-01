@@ -92,10 +92,11 @@ type MixerLine = {
  * prices the credit / step from it, and it is what makes the calculator show
  * the chosen models, their average tokens and the input / output / cache /
  * cache-write split when the credit is opened in the product.
- * `orgModelId` is the workspace's own model row id (`id` from GET /api/v1/models).
+ * `modelId` names the model the same way a usage signal's `usage.model` does
+ * (`modelId` from GET /api/v1/models).
  */
 type BundleEntry = {
-  orgModelId: string;
+  modelId: string;
   modelName: string;
   /** The line's token count — `averageTokensPerLLMCall` on the wire. */
   averageTokensPerLLMCall: number;
@@ -144,12 +145,6 @@ async function computeMixerBase(
         error: `Model "${line.model}" is turned off — re-enable it before pricing against it.`,
       };
     }
-    if (typeof m.id !== "string" || m.id.length === 0) {
-      return {
-        ok: false,
-        error: "This ClockNext server doesn't return model ids, so a model bundle can't be built. Price this in the ClockNext product instead.",
-      };
-    }
     const cachePct = line.cachePct ?? 0;
     const cacheWritePct = line.cacheWritePct ?? 0;
     const total = line.inputPct + line.outputPct + cachePct + cacheWritePct;
@@ -175,7 +170,8 @@ async function computeMixerBase(
     basePrice += (line.avgTokens * perToken) / 1_000_000;
 
     bundle.push({
-      orgModelId: m.id,
+      // The model's stored id, not the agent's spelling (the lookup ignores case).
+      modelId: m.modelId,
       modelName: typeof m.modelName === "string" ? m.modelName : line.model,
       averageTokensPerLLMCall: line.avgTokens,
       input: line.inputPct,

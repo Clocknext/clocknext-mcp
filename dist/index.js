@@ -21672,12 +21672,6 @@ async function computeMixerBase(cnk, lines) {
         error: `Model "${line.model}" is turned off \u2014 re-enable it before pricing against it.`
       };
     }
-    if (typeof m.id !== "string" || m.id.length === 0) {
-      return {
-        ok: false,
-        error: "This ClockNext server doesn't return model ids, so a model bundle can't be built. Price this in the ClockNext product instead."
-      };
-    }
     const cachePct = line.cachePct ?? 0;
     const cacheWritePct = line.cacheWritePct ?? 0;
     const total = line.inputPct + line.outputPct + cachePct + cacheWritePct;
@@ -21697,7 +21691,8 @@ async function computeMixerBase(cnk, lines) {
     const perToken = line.inputPct / 100 * m.inputPrice + line.outputPct / 100 * m.outputPrice + cachePct / 100 * m.cachePrice + cacheWritePct / 100 * (cacheWritePrice ?? 0);
     basePrice += line.avgTokens * perToken / 1e6;
     bundle.push({
-      orgModelId: m.id,
+      // The model's stored id, not the agent's spelling (the lookup ignores case).
+      modelId: m.modelId,
       modelName: typeof m.modelName === "string" ? m.modelName : line.model,
       averageTokensPerLLMCall: line.avgTokens,
       input: line.inputPct,
@@ -22851,7 +22846,7 @@ function registerWriteEnv(server) {
 // src/index.ts
 async function main() {
   const cnk = makeClient();
-  const server = new McpServer({ name: "clocknext", version: "0.12.0" });
+  const server = new McpServer({ name: "clocknext", version: "0.13.0" });
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerSearchDocs(server);
