@@ -10,22 +10,27 @@ import { errMsg, errorResult, jsonResult } from "./util";
  * client (`src/api.ts`) rather than letting a model assemble raw API calls.
  *
  * Credit / outcome PRICING is model-grounded: the tool takes a `models` mixer
- * (enabled catalog model + avg tokens + input/output/cache split), reads the org's
- * live per-1M-token prices via list_models, and COMPUTES the base price + margin —
- * an agent can never hand-type an ungrounded price here. (The ClockNext product's mixer is
- * still the preferred, first-class way to price — it previews live and stores the
- * full per-model bundle; these tools are the fallback and store the computed price
- * only.)
+ * (enabled catalog model + avg tokens + input/output/cache/cache-write split),
+ * checks it against the org's live models via list_models, and sends it as the
+ * credit's / step's `modelBundle`. The SERVER works the base price out from that
+ * bundle (and refuses a credit or new step without one) — an agent can never
+ * hand-type an ungrounded price here. (The ClockNext product's mixer is still
+ * the preferred, first-class way to price — it previews live; these tools are
+ * the fallback and save the same bundle.)
+ *
+ * Every update tool is a PARTIAL update, like the API behind it: send the id
+ * plus only the fields to change; everything left out keeps its stored value.
  *
  * "Archive" maps to `setActive(id, false)` — a reversible deactivation, NOT a hard
- * delete (hard delete exists on the SDK but is intentionally not exposed here).
+ * delete (hard delete exists on the API but is intentionally not exposed here).
  */
 
 // ---------- shared field schemas ----------
 
 /** One line of a pricing mixer: an enabled catalog model + how many tokens it
- *  uses on average, split across input/output/cache as PERCENTAGES that total 100.
- *  The 100% rule is enforced here (refine) so a bad split is rejected at parse. */
+ *  uses on average, split across input/output/cache/cache-write as PERCENTAGES
+ *  that total 100. The 100% rule is enforced here (refine) so a bad split is
+ *  rejected at parse. */
 const mixerLine = z
   .object({
     model: z
@@ -56,50 +61,63 @@ const mixerLine = z
       .min(0)
       .max(100)
       .default(0)
-      .describe("Percent that are cache tokens (whole number). Default 0."),
+      .describe("Percent that are cache-READ tokens (whole number). Default 0."),
+    cacheWritePct: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .default(0)
+      .describe(
+        "Percent that are cache-WRITE tokens (whole number). Default 0. Only for a model that has a cache-write price (cacheWritePrice in clocknext_list_models); must be 0 otherwise.",
+      ),
   })
-  .refine((l) => Math.round(l.inputPct + l.outputPct + (l.cachePct ?? 0)) === 100, {
-    message: "inputPct + outputPct + cachePct must total 100.",
-  });
+  .refine(
+    (l) => l.inputPct + l.outputPct + (l.cachePct ?? 0) + (l.cacheWritePct ?? 0) === 100,
+    { message: "inputPct + outputPct + cachePct + cacheWritePct must total 100." },
+  );
 
-type MixerLine = { model: string; avgTokens: number; inputPct: number; outputPct: number; cachePct?: number };
+type MixerLine = {
+  model: string;
+  avgTokens: number;
+  inputPct: number;
+  outputPct: number;
+  cachePct?: number;
+  cacheWritePct?: number;
+};
 
 /**
  * One saved line of the ClockNext product's pricing calculator — the same shape
- * the product stores on a credit / outcome step as `modelBundle`. Sending it is
- * what makes the calculator show the chosen models, their average tokens and
- * the input / output / cache split when the credit is opened in the product.
- * Without it only the computed price is saved and the calculator opens empty.
+ * the product stores on a credit / outcome step as `modelBundle`. The server
+ * prices the credit / step from it, and it is what makes the calculator show
+ * the chosen models, their average tokens and the input / output / cache /
+ * cache-write split when the credit is opened in the product.
  * `orgModelId` is the workspace's own model row id (`id` from GET /api/v1/models).
  */
 type BundleEntry = {
   orgModelId: string;
   modelName: string;
-  tokens: number;
+  /** The line's token count — `averageTokensPerLLMCall` on the wire. */
+  averageTokensPerLLMCall: number;
   input: number;
   output: number;
   cache: number;
+  cacheWrite: number;
 };
 
-/** Total of every mixer line's average tokens — the calculator's token volume. */
-function sumTokens(lines: readonly MixerLine[]): number {
-  let total = 0;
-  for (const line of lines) {
-    total = total + line.avgTokens;
-  }
-  return Math.round(total);
-}
-
 /**
- * Compute a model-grounded base price (USD) from a mixer, using the org's LIVE
- * model prices. Rejects a model that isn't enabled/active or a split that doesn't
- * total 100, so a price can never be grounded in a disabled/unknown model.
+ * Turn a mixer into the `modelBundle` the server prices from, checking it
+ * against the org's LIVE models first so the agent gets an actionable message:
+ * a model that isn't enabled / is turned off, a split that doesn't total 100,
+ * or a cache-write share on a model with no cache-write price are refused here.
+ * Also works out the base price (USD) the server will arrive at, so a bundle
+ * that would price at $0 is caught before it is sent.
  */
 async function computeMixerBase(
   cnk: ClockNextApi,
   lines: readonly MixerLine[],
 ): Promise<
-  | { ok: true; basePrice: number; bundle: BundleEntry[] | null }
+  | { ok: true; basePrice: number; bundle: BundleEntry[] }
   | { ok: false; error: string }
 > {
   let models;
@@ -111,10 +129,7 @@ async function computeMixerBase(
   const byId = new Map(models.map((m) => [m.modelId.toLowerCase(), m]));
 
   let basePrice = 0;
-  // Stays a list only while every model carries its row `id`. An older server
-  // that doesn't return `id` still gets the credit priced — just without the
-  // calculator breakdown (null), exactly as before.
-  let bundle: BundleEntry[] | null = [];
+  const bundle: BundleEntry[] = [];
   for (const line of lines) {
     const m = byId.get(line.model.toLowerCase());
     if (!m) {
@@ -129,42 +144,59 @@ async function computeMixerBase(
         error: `Model "${line.model}" is turned off — re-enable it before pricing against it.`,
       };
     }
-    const cachePct = line.cachePct ?? 0;
-    const total = line.inputPct + line.outputPct + cachePct;
-    if (Math.round(total) !== 100) {
+    if (typeof m.id !== "string" || m.id.length === 0) {
       return {
         ok: false,
-        error: `For model "${line.model}", inputPct + outputPct + cachePct must total 100 (got ${total}).`,
+        error: "This ClockNext server doesn't return model ids, so a model bundle can't be built. Price this in the ClockNext product instead.",
+      };
+    }
+    const cachePct = line.cachePct ?? 0;
+    const cacheWritePct = line.cacheWritePct ?? 0;
+    const total = line.inputPct + line.outputPct + cachePct + cacheWritePct;
+    if (total !== 100) {
+      return {
+        ok: false,
+        error: `For model "${line.model}", inputPct + outputPct + cachePct + cacheWritePct must total 100 (got ${total}).`,
+      };
+    }
+    const cacheWritePrice = typeof m.cacheWritePrice === "number" ? m.cacheWritePrice : null;
+    if (cacheWritePct > 0 && cacheWritePrice === null) {
+      return {
+        ok: false,
+        error: `Model "${line.model}" has no cache-write price, so its cacheWritePct must be 0.`,
       };
     }
     // Prices are USD per 1,000,000 tokens (same basis as the pricing engine).
     const perToken =
       (line.inputPct / 100) * m.inputPrice +
       (line.outputPct / 100) * m.outputPrice +
-      (cachePct / 100) * m.cachePrice;
+      (cachePct / 100) * m.cachePrice +
+      (cacheWritePct / 100) * (cacheWritePrice ?? 0);
     basePrice += (line.avgTokens * perToken) / 1_000_000;
 
-    if (bundle !== null && typeof m.id === "string" && m.id.length > 0) {
-      bundle.push({
-        orgModelId: m.id,
-        modelName: typeof m.modelName === "string" ? m.modelName : line.model,
-        tokens: line.avgTokens,
-        input: line.inputPct,
-        output: line.outputPct,
-        cache: cachePct,
-      });
-    } else {
-      bundle = null;
-    }
+    bundle.push({
+      orgModelId: m.id,
+      modelName: typeof m.modelName === "string" ? m.modelName : line.model,
+      averageTokensPerLLMCall: line.avgTokens,
+      input: line.inputPct,
+      output: line.outputPct,
+      cache: cachePct,
+      cacheWrite: cacheWritePct,
+    });
   }
   return { ok: true, basePrice, bundle };
 }
 
-// Plan component: flattened discriminated union. The per-type rules below are
-// enforced by the server, not here — VERIFIED live: a missing/duplicated field is a
-// 400 ValidationError ("Pick a credit.", "Enter a quantity for the composite.") and an
-// id that resolves to nothing is a 404 NotFoundError. Both surface through errMsg with
-// their status intact, so the field notes only have to guide the agent, not gate it.
+// Plan component: flattened discriminated union. Every optional id / amount /
+// quantity field also takes null, because that is how clocknext_get_plan reads
+// them back (rollover always reads back as a boolean) — so a
+// plan's entitlements can be sent straight back to clocknext_update_plan.
+// The per-type rules below are
+// enforced by the server, not here: a missing/duplicated field, an id that
+// resolves to nothing, or an archived item newly added are all a 400
+// ValidationError ("Pick a credit.", "One or more credits don't exist in this
+// workspace.", "The credit … is archived …"), surfaced through errMsg with the
+// status intact, so the field notes only have to guide the agent, not gate it.
 const planComponent = z
   .object({
     type: z
@@ -175,37 +207,47 @@ const planComponent = z
     billingMode: z
       .enum(["ADVANCE", "ARREAR"])
       .describe(
-        "ADVANCE bills up-front for the cycle (needs amount/quantity); ARREAR meters and bills what was consumed.",
+        "ADVANCE bills up-front for the cycle (grants amount/quantity); ARREAR meters and bills what was consumed.",
       ),
     amount: z
       .number()
-      .optional()
+      .nullish()
       .describe(
-        "WALLET or FLAT only, and REQUIRED for them (USD). WALLET = prepaid balance (plain wallet signals debit it at raw model cost — no margin; wallet-funded ARREAR usage debits it at customer price, margin included); FLAT = one-off fee.",
+        "WALLET or FLAT only (USD). FLAT = one-off fee, REQUIRED and above 0. WALLET + ADVANCE = prepaid balance granted each cycle; $0 is allowed (e.g. a wallet carried only to fund metering). Plain wallet signals debit it at raw model cost — no margin; wallet-funded ARREAR usage debits it at customer price, margin included.",
       ),
     creditId: z
       .string()
-      .optional()
-      .describe("CREDIT only: id of an existing credit (clocknext_list_credits)."),
+      .nullish()
+      .describe("CREDIT only: id of an existing, active credit (clocknext_list_credits)."),
     outcomeId: z
       .string()
-      .optional()
-      .describe("OUTCOME only: id of an existing outcome (clocknext_list_outcomes)."),
+      .nullish()
+      .describe("OUTCOME only: id of an existing, active outcome (clocknext_list_outcomes)."),
     unitId: z
       .string()
-      .optional()
-      .describe("UNIT only: id of an existing unit (clocknext_list_units)."),
+      .nullish()
+      .describe("UNIT only: id of an existing, active unit (clocknext_list_units)."),
+    compositeId: z
+      .string()
+      .nullish()
+      .describe(
+        "PRICING_METRIC only: id of an existing, active COMPOSITE (clocknext_list_composites). Plans read back with this same field, so a get_plan → update_plan round-trip keeps it. This component is the ONLY thing that makes a composite bill — the catalogue entry alone charges nobody.",
+      ),
     pricingMetricId: z
       .string()
-      .optional()
-      .describe(
-        "PRICING_METRIC only: id of an existing COMPOSITE (clocknext_list_composites). This component is the ONLY thing that makes a composite bill — the catalogue entry alone charges nobody.",
-      ),
+      .nullish()
+      .describe("Older name for compositeId, still accepted. Prefer compositeId."),
     quantity: z
       .number()
+      .nullish()
+      .describe(
+        "CREDIT/OUTCOME/UNIT/PRICING_METRIC + ADVANCE only: the quantity granted each cycle (whole number; 0 is allowed and is the default — the entitlement exists and can be topped up by hand). Omit for ARREAR (metered). For PRICING_METRIC + ADVANCE it is a prepaid POOL of composite-occurrence slots shared across the wrapped items: each distinct tag value claims one slot on completion, repeats reuse it; running past the pool is allowed and carries as debt into the next cycle.",
+      ),
+    rollover: z
+      .boolean()
       .optional()
       .describe(
-        "CREDIT/OUTCOME/UNIT/PRICING_METRIC only: the granted quantity — REQUIRED when billingMode is ADVANCE, omit when ARREAR (metered). For PRICING_METRIC + ADVANCE it is a prepaid POOL of composite-occurrence slots shared across the wrapped items: each distinct tag value claims one slot on completion, repeats reuse it, and once the pool is empty further occurrences are refused rather than billed.",
+        "ADVANCE CREDIT/OUTCOME/PRICING_METRIC/WALLET only: carry what's left this cycle into the next one instead of resetting. Default false. Ignored (stored false) for UNIT, FLAT, ARREAR lines, and on FREE plans.",
       ),
   })
   .describe("One entitlement line in the plan.");
@@ -214,19 +256,23 @@ const unitTier = z.object({
   upTo: z
     .number()
     .nullable()
-    .describe("Upper bound of this tier; only the LAST tier may be null (unbounded)."),
+    .describe(
+      "Upper bound of this tier (whole number, rising tier by tier). The LAST tier must be null ('and above'), and only the last.",
+    ),
   price: z.number().describe("Price for this tier."),
 });
 
-// ---------- per-resource create/update input shapes (update == create) ----------
+// ---------- per-resource create input shapes ----------
+// The update tools take the same fields, every one optional (see
+// `partialShape`), because every update is a partial update.
 
 const planInput: z.ZodRawShape = {
   name: z.string().describe("Plan name."),
   description: z.string().nullish().describe("Optional description."),
   billingCycle: z
-    .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "YEARLY", "EVERY_5_MIN", "FREE"])
+    .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "YEARLY", "FREE"])
     .describe(
-      "Billing cadence. EVERY_5_MIN is a TESTING-ONLY fast cadence (exercises the full invoice→payment→next-cycle loop in minutes, e.g. on sandbox) — never offer it for a real plan.",
+      "Billing cadence. FREE is a one-time grant with no invoice.",
     ),
   carryForward: z
     .boolean()
@@ -238,7 +284,7 @@ const planInput: z.ZodRawShape = {
     .boolean()
     .optional()
     .describe(
-      "Wallet-funded metering. Default false. When true, every metered (ARREAR) CREDIT/OUTCOME/UNIT component is paid FROM the customer's prepaid WALLET as usage happens — one invoice per cycle — instead of a separate arrear invoice at cycle end. The wallet may go negative mid-cycle; the next cycle's wallet top-up absorbs the overdraft. Backend rejects (422) unless ALL THREE hold: (1) the plan has at least one ARREAR credit/outcome/unit component; (2) the plan has a WALLET component; (3) that WALLET component is billingMode ADVANCE (a metered/ARREAR wallet is refused as double-billing). Margin is PRESERVED: wallet-funded ARREAR usage debits the wallet at the CUSTOMER price (margin included) — only plain type:'wallet' signals debit at raw model cost with no margin.",
+      "Wallet-funded metering. Default false. When true, every metered (ARREAR) CREDIT/OUTCOME/UNIT/PRICING_METRIC component is paid FROM the customer's prepaid WALLET as usage happens — one invoice per cycle — instead of a separate arrear invoice at cycle end. The wallet may go negative mid-cycle; the next cycle's wallet top-up absorbs the overdraft. Backend rejects it (400) unless ALL THREE hold: (1) the plan has at least one ARREAR credit/outcome/unit/composite component; (2) the plan has a WALLET component; (3) that WALLET component is billingMode ADVANCE (a metered/ARREAR wallet is refused as double-billing). Margin is PRESERVED: wallet-funded ARREAR usage debits the wallet at the CUSTOMER price (margin included) — only plain type:'wallet' signals debit at raw model cost with no margin.",
     ),
   priceAdjustment: z
     .number()
@@ -246,13 +292,11 @@ const planInput: z.ZodRawShape = {
     .describe(
       "Signed rounding nudge (USD) on the plan's computed due-at-purchase price — negative discounts, positive adds (e.g. -0.01 to land on a round number). Default 0; coerced to 0 for FREE / all-ARREAR plans that have no advance total to round. Leave unset unless you need to tidy a rounding edge.",
     ),
-  currencyCode: z.string().optional().describe("ISO 4217 (3 letters). Default USD."),
-  isActive: z.boolean().optional().describe("Whether the plan is active/sellable."),
-  components: z
+  entitlements: z
     .array(planComponent)
     .min(1)
     .describe(
-      "At least one entitlement line. CREDIT/OUTCOME/UNIT components reference an existing resource by id, and PRICING_METRIC references an existing composite by pricingMetricId — create those first.",
+      "At least one entitlement line. CREDIT/OUTCOME/UNIT lines reference an existing resource by id, and PRICING_METRIC references an existing composite by compositeId — create those first. The plan's currency is the workspace's primary currency; it isn't set here.",
     ),
 };
 
@@ -272,19 +316,20 @@ const creditInput: z.ZodRawShape = {
     ),
   marginPercent: z
     .number()
-    .min(0)
-    .describe("Markup over the computed base cost, as a percent (100 = double the base = pricePerCredit)."),
-  tokensPerCredit: z
-    .number()
-    .min(0)
-    .optional()
+    .min(-100)
     .describe(
-      "Display-only metadata: the token volume of the pricing bundle shown in the ClockNext product. Does NOT affect draw-down — credits consumed per signal = provider cost / basePrice. Default 0.",
+      "Markup over the computed base cost, as a percent (100 = double the base = pricePerCredit; negative discounts, down to -100 = free).",
     ),
-  description: z.string().optional().describe("Optional human-readable description."),
+  description: z.string().nullish().describe("Optional human-readable description."),
 };
 
 const outcomeStep = z.object({
+  id: z
+    .string()
+    .optional()
+    .describe(
+      "UPDATE only: the existing step's id (from clocknext_get_outcome). Leave it out for a new step. A step sent without an id but with an existing step's agentKey is matched to that step anyway.",
+    ),
   name: z.string().min(1).describe("Step name (unique within the outcome)."),
   agentKey: z
     .string()
@@ -295,8 +340,9 @@ const outcomeStep = z.object({
   models: z
     .array(mixerLine)
     .min(1)
+    .optional()
     .describe(
-      "Model mixer grounding THIS step's price. Every outcome step is an LLM step — a non-LLM, fixed-cost event is a UNIT, not an outcome step.",
+      "Model mixer grounding THIS step's price — REQUIRED for a new step. On update, leave it out to keep an existing step's current price. Every outcome step is an LLM step — a non-LLM, fixed-cost event is a UNIT, not an outcome step.",
     ),
 });
 
@@ -309,11 +355,12 @@ const outcomeInput: z.ZodRawShape = {
       "The OUTCOME's own stable key — REQUIRED, unique org-wide, chars [a-z0-9._-]. Distinct from a step's agentKey and in a separate namespace: usage is still reported against a STEP's key, never this one. This identifies the outcome itself (mirrors a credit's agentKey); a rename never changes it.",
     ),
   description: z.string().nullish().describe("Optional human-readable description."),
-  isActive: z.boolean().optional().describe("Whether the outcome is active/sellable."),
   marginPercent: z
     .number()
-    .min(0)
-    .describe("Markup over the summed step base costs, as a percent (100 = double = pricePerOutcome)."),
+    .min(-100)
+    .describe(
+      "Markup over the summed step base costs, as a percent (100 = double = pricePerOutcome; negative discounts, down to -100).",
+    ),
   steps: z
     .array(outcomeStep)
     .min(1)
@@ -338,9 +385,8 @@ const unitInput: z.ZodRawShape = {
     .min(1)
     .max(50)
     .optional()
-    .describe("SLAB/VOLUME only: 1–50 tiers, ordered; only the last may have upTo:null."),
+    .describe("SLAB/VOLUME only: 1–50 tiers, ordered by rising upTo; the last one (and only it) has upTo:null."),
   description: z.string().nullish().describe("Optional human-readable description."),
-  isActive: z.boolean().optional().describe("Whether the unit is active/sellable."),
 };
 
 // ---------- the CRUD factory ----------
@@ -353,32 +399,48 @@ interface Api {
   setActive: (id: string, active: boolean) => Promise<unknown>;
 }
 
-/** Transforms tool args into the API create/update payload — used by credit /
- *  outcome to turn a `models` mixer into a computed base price. Returns an error
+/** Transforms tool args into the API create / update payload — used by credit /
+ *  outcome to turn a `models` mixer into a `modelBundle`. Returns an error
  *  string (surfaced to the caller) instead of throwing. */
 type PriceInput = (
   args: Record<string, unknown>,
 ) => Promise<Record<string, unknown> | { error: string }>;
+
+/** The update tools take the create fields with every one optional: an update
+ *  is partial, so only the fields the agent sends change. */
+function partialShape(shape: z.ZodRawShape): z.ZodRawShape {
+  const partial: z.ZodRawShape = {};
+  for (const [key, field] of Object.entries(shape)) {
+    partial[key] = (field as z.ZodTypeAny).optional();
+  }
+  return partial;
+}
+
+/** The arguments the agent actually sent — `undefined` fields dropped, so a
+ *  left-out field is left out of the PATCH body too. */
+function definedOnly(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
 
 function registerCrud(
   server: McpServer,
   opts: {
     resource: string; // singular, e.g. "plan"
     plural: string; // e.g. "plans"
-    /** Whether this resource's full-edit endpoint actually honours `isActive`.
-     *  VERIFIED against the live API, and it is NOT uniform: plan / outcome /
-     *  unit updates DO flip active state, credit updates do not (the backend's
-     *  credit schema has no isActive, so `creditInput` omits it too). The
-     *  archive/unarchive descriptions below are generated from this, so they
-     *  can't drift back into claiming a blanket rule that isn't true. */
-    updateHonoursIsActive: boolean;
     api: Api;
     input: z.ZodRawShape;
     desc: { list: string; get: string; create: string; update: string; archive: string };
-    priceInput?: PriceInput;
+    /** Builds the create body from the tool args. */
+    priceCreate?: PriceInput;
+    /** Builds the (partial) update body from the tool args. */
+    priceUpdate?: PriceInput;
   },
 ): void {
-  const { resource, plural, api, input, desc, priceInput, updateHonoursIsActive } = opts;
+  const { resource, plural, api, input, desc, priceCreate, priceUpdate } = opts;
 
   server.registerTool(
     `clocknext_list_${plural}`,
@@ -442,9 +504,9 @@ function registerCrud(
     },
     async (args) => {
       try {
-        let payload: Record<string, unknown> = args;
-        if (priceInput) {
-          const priced = await priceInput(args);
+        let payload: Record<string, unknown> = definedOnly(args);
+        if (priceCreate) {
+          const priced = await priceCreate(args);
           if ("error" in priced) return errorResult(priced.error as string);
           payload = priced;
         }
@@ -463,18 +525,21 @@ function registerCrud(
       description: desc.update,
       inputSchema: {
         id: z.string().describe(`The ${resource} id to update.`),
-        ...input,
+        ...partialShape(input),
       },
       annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
     },
     async (args) => {
       try {
         const { id, ...rest } = args as { id: string } & Record<string, unknown>;
-        let payload: Record<string, unknown> = rest;
-        if (priceInput) {
-          const priced = await priceInput(rest);
+        let payload: Record<string, unknown> = definedOnly(rest);
+        if (priceUpdate) {
+          const priced = await priceUpdate(payload);
           if ("error" in priced) return errorResult(priced.error as string);
           payload = priced;
+        }
+        if (Object.keys(payload).length === 0) {
+          return errorResult(`Nothing to update — pass the ${resource} id plus at least one field to change.`);
         }
         const res = await api.update(id, payload);
         return jsonResult(res ?? { ok: true });
@@ -507,9 +572,6 @@ function registerCrud(
     },
   );
 
-  // The bare active toggle is the explicit reactivation path. Whether the
-  // full edit ALSO flips isActive differs per resource (see
-  // `updateHonoursIsActive`), so the wording below is generated, not asserted.
   server.registerTool(
     `clocknext_unarchive_${resource}`,
     {
@@ -518,9 +580,7 @@ function registerCrud(
         `Reactivate an archived ${resource} (sets isActive→true) — the reverse of clocknext_archive_${resource}. Same identity, same definition; nothing is re-priced or rewritten.`,
         "",
         "Rules:",
-        updateHonoursIsActive
-          ? `- Prefer this over clocknext_update_${resource}: that full edit CAN also set isActive, but it rewrites the whole ${resource} at the same time. This tool changes active state and nothing else.`
-          : `- This is the ONLY way to reactivate via the MCP — clocknext_update_${resource} has no isActive field, so a full edit cannot flip active state.`,
+        `- This and clocknext_archive_${resource} are the only way to change active state — no update tool takes isActive.`,
         `- Prefer this over creating a replacement: agentKeys/identities are unique org-wide, so a parked ${resource} must be revived, never duplicated.`,
       ].join("\n"),
       inputSchema: { id: z.string().describe(`The ${resource} id to reactivate.`) },
@@ -542,13 +602,98 @@ function registerCrud(
   );
 }
 
+// ---------- credit / outcome payload builders ----------
+
+/** The plain fields a credit body carries besides its pricing. */
+const CREDIT_FIELDS = ["name", "agentKey", "marginPercent", "description"] as const;
+
+/** Copies `keys` from `args` when present (an update leaves the rest out). */
+function pick(args: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (args[key] !== undefined) out[key] = args[key];
+  }
+  return out;
+}
+
+/** A credit body: its fields plus, when a mixer was given, the `modelBundle`
+ *  the server prices it from. `requireModels` is true for create. */
+async function creditBody(
+  cnk: ClockNextApi,
+  args: Record<string, unknown>,
+  requireModels: boolean,
+): Promise<Record<string, unknown> | { error: string }> {
+  const body = pick(args, CREDIT_FIELDS);
+  const models = args.models as MixerLine[] | undefined;
+  if (models === undefined) {
+    if (requireModels) return { error: "Pass `models` — a credit is priced from a model mixer." };
+    return body;
+  }
+  const priced = await computeMixerBase(cnk, models);
+  if (!priced.ok) return { error: priced.error };
+  if (priced.basePrice <= 0) {
+    return {
+      error:
+        "Credit priced to $0 — the mixer's model(s) have no catalog price, so usage would meter at zero revenue. Set their pricing on the Models page first, then retry.",
+    };
+  }
+  return { ...body, modelBundle: priced.bundle };
+}
+
+/** The plain fields an outcome body carries besides its steps. */
+const OUTCOME_FIELDS = ["name", "agentKey", "marginPercent", "description"] as const;
+
+type StepArgs = { id?: string; name: string; agentKey: string; models?: MixerLine[] };
+
+/** An outcome body: its fields plus, when `steps` was given, every step with
+ *  its `modelBundle`. A step with no `models` is only allowed on update, where
+ *  it keeps that existing step's price (`requireModels` is true for create). */
+async function outcomeBody(
+  cnk: ClockNextApi,
+  args: Record<string, unknown>,
+  requireModels: boolean,
+): Promise<Record<string, unknown> | { error: string }> {
+  const body = pick(args, OUTCOME_FIELDS);
+  const steps = args.steps as StepArgs[] | undefined;
+  if (steps === undefined) {
+    if (requireModels) return { error: "Pass `steps` — an outcome needs at least one step." };
+    return body;
+  }
+  const outSteps: Record<string, unknown>[] = [];
+  for (const step of steps) {
+    const outStep: Record<string, unknown> = { name: step.name, agentKey: step.agentKey };
+    if (step.id !== undefined) outStep.id = step.id;
+    if (step.models === undefined) {
+      if (requireModels) {
+        return { error: `Step "${step.name}": pass \`models\` — a new step is priced from a model mixer.` };
+      }
+      outSteps.push(outStep);
+      continue;
+    }
+    const priced = await computeMixerBase(cnk, step.models);
+    if (!priced.ok) return { error: `Step "${step.name}": ${priced.error}` };
+    if (priced.basePrice <= 0) {
+      return {
+        error: `Step "${step.name}" priced to $0 — give it real token usage, or model a fixed-cost/non-LLM event as a UNIT instead of an outcome step.`,
+      };
+    }
+    outStep.modelBundle = priced.bundle;
+    outSteps.push(outStep);
+  }
+  return { ...body, steps: outSteps };
+}
+
+// ---------- shared rule text ----------
+
+const PARTIAL_UPDATE_RULE =
+  "- Partial update: pass the id plus ONLY the fields to change; everything you leave out keeps its stored value. Lists you do send (steps, tiers, entitlements) are the complete new list. Active state isn't an update field — use the archive / unarchive tools.";
+
 // ---------- wire the four resources ----------
 
 export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): void {
   registerCrud(server, {
     resource: "plan",
     plural: "plans",
-    updateHonoursIsActive: true,
     api: {
       list: (p) => cnk.plans.list(p),
       get: (id) => cnk.plans.get(id),
@@ -558,34 +703,36 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
     },
     input: planInput,
     desc: {
-      list: "List the organisation's billing plans (id, name, billing cycle, price, active). Find a plan id, or see what's on offer. Pass active=true for only sellable plans, active=false for only archived ones.",
-      get: "Get one plan in full by id — its entitlement components (wallet/credit/outcome/unit/flat/composite), billing cycle, currency and active state. A composite component reads back as type PRICING_METRIC with its pricingMetricId, so a read→edit→update round-trip keeps it.",
+      list: "List the organisation's billing plans (id, name, billing cycle, cost, currency, active, entitlements). Find a plan id, or see what's on offer. Pass active=true for only sellable plans, active=false for only archived ones.",
+      get: "Get one plan's configuration by id — its `entitlements` (wallet/credit/outcome/unit/flat/composite lines, each with quantity/amount and rollover), billing cycle, cost, currency and active state. A composite line reads back as type PRICING_METRIC with its compositeId, so a read→edit→update round-trip keeps it.",
       create: [
-        "Create a billing plan bundling one or more entitlement `components`: WALLET (prepaid USD balance, debited at raw model cost — no margin), FLAT (one-off fee), CREDIT/OUTCOME/UNIT entitlements referencing an existing resource by id, or PRICING_METRIC referencing an existing COMPOSITE by pricingMetricId.",
+        "Create a billing plan bundling one or more `entitlements`: WALLET (prepaid USD balance, debited at raw model cost — no margin), FLAT (one-off fee), CREDIT/OUTCOME/UNIT entitlements referencing an existing resource by id, or PRICING_METRIC referencing an existing COMPOSITE by compositeId.",
         "",
         "Rules:",
-        "- Create referenced credits/outcomes/units first (clocknext_create_credit / _outcome / _unit), then pass their ids.",
-        "- To SELL a composite, add a PRICING_METRIC component with the composite's id as pricingMetricId (clocknext_list_composites). This is the only thing that makes a composite bill — the catalogue entry alone charges nobody, errors nowhere, and looks configured. ADVANCE needs a quantity: a prepaid POOL of occurrence slots shared across the wrapped items.",
-        "- Each component's billingMode is ADVANCE (up-front, needs amount/quantity) or ARREAR (metered).",
-        "- Set walletFundedArrear:true to pay metered (ARREAR) usage from the plan's prepaid WALLET as it happens (one invoice/cycle, wallet may go negative) instead of a separate cycle-end arrear invoice. Requires >=1 ARREAR credit/outcome/unit AND an ADVANCE WALLET component, or the backend rejects it (422).",
-        "- FREE plans must be ADVANCE-only with no FLAT component.",
+        "- Create referenced credits/outcomes/units first (clocknext_create_credit / _outcome / _unit), then pass their ids. Every item referenced must be active.",
+        "- To SELL a composite, add a PRICING_METRIC entitlement with the composite's id as compositeId (clocknext_list_composites). This is the only thing that makes a composite bill — the catalogue entry alone charges nobody, errors nowhere, and looks configured. For ADVANCE, its quantity is a prepaid POOL of occurrence slots shared across the wrapped items.",
+        "- Each entitlement's billingMode is ADVANCE (up-front grant) or ARREAR (metered). Set rollover:true on an ADVANCE credit/outcome/composite/wallet line to carry what's left into the next cycle.",
+        "- Set walletFundedArrear:true to pay metered (ARREAR) usage from the plan's prepaid WALLET as it happens (one invoice/cycle, wallet may go negative) instead of a separate cycle-end arrear invoice. Requires >=1 ARREAR credit/outcome/unit/composite AND an ADVANCE WALLET component, or the backend rejects it (400).",
+        "- FREE plans must be ADVANCE-only with no FLAT component, and never roll over.",
+        "- A plan name already in use is refused (409). The currency is the workspace's primary currency (Settings → Organization → Currencies); it can't be chosen here.",
         "- Creates a real, sellable plan — get pricing right first. Prefer the plan builder in the ClockNext product (https://payments.clocknext.com/plans); this is the fallback.",
       ].join("\n"),
       update: [
-        "Replace a plan by id with a COMPLETE new definition (same shape as create).",
+        "Update a plan by id.",
         "",
         "Rules:",
-        "- Full rewrite, not a patch — omitted fields are dropped. Read it first with clocknext_get_plan, edit, then send the whole thing back. Re-send every component you want to keep, PRICING_METRIC (composite) lines included — dropping one unsells that composite.",
-        "- Components are replaced, not edited in place: every component gets a NEW id on each update, even ones you sent back unchanged. Never store a component id as a durable handle.",
-        "- walletFundedArrear is part of that full definition — re-send it (with the ADVANCE WALLET + ARREAR components it requires) or it reverts to false. carryForward is deprecated and ignored.",
-        "- Changes apply going forward; customers already on the plan keep their terms.",
+        PARTIAL_UPDATE_RULE,
+        "- `entitlements`, if sent, replaces ALL lines: re-send every line you want to keep, PRICING_METRIC (composite) lines included — dropping one unsells that composite. Easiest: read it with clocknext_get_plan, edit the list, send it back as-is (compositeId and rollover included).",
+        "- Lines get NEW ids on each entitlements update, even ones you sent back unchanged. Never store a line id as a durable handle.",
+        "- An item already on the plan may stay even if since archived; a newly added one must be active.",
+        "- Changes apply to new purchases; customers already on the plan keep their terms until they re-purchase. carryForward is deprecated and ignored.",
       ].join("\n"),
       archive: [
-        "Deactivate a plan (sets isActive→false) — ClockNext's soft archive, NOT a delete.",
+        "Archive a plan (isActive→false) — the API never deletes; this is how a plan is retired.",
         "",
         "Rules:",
         "- History is kept and customers already on it are unaffected; it just becomes unsellable and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_plan. clocknext_update_plan can also set isActive, but it rewrites the entire plan — use unarchive when all you want is to switch it back on.",
+        "- Reversible: reactivate with clocknext_unarchive_plan.",
         "- Unrelated to cancelling a customer's purchase or ending a subscription.",
       ].join("\n"),
     },
@@ -594,7 +741,6 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
   registerCrud(server, {
     resource: "credit",
     plural: "credits",
-    updateHonoursIsActive: false,
     api: {
       list: (p) => cnk.credits.list(p),
       get: (id) => cnk.credits.get(id),
@@ -603,63 +749,35 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
       setActive: (id, a) => cnk.credits.setActive(id, a),
     },
     input: creditInput,
-    // Turn the `models` mixer into a model-grounded basePrice + pricePerCredit.
-    priceInput: async (args) => {
-      const a = args as {
-        name: string;
-        agentKey: string;
-        models: MixerLine[];
-        marginPercent: number;
-        tokensPerCredit?: number;
-        description?: string;
-      };
-      const priced = await computeMixerBase(cnk, a.models);
-      if (!priced.ok) return { error: priced.error };
-      if (priced.basePrice <= 0) {
-        return {
-          error:
-            "Credit priced to $0 — the mixer's model(s) have no catalog price, so usage would meter at zero revenue. Set their pricing on the Models page first, then retry.",
-        };
-      }
-      return {
-        name: a.name,
-        agentKey: a.agentKey,
-        basePrice: priced.basePrice,
-        marginPercent: a.marginPercent,
-        pricePerCredit: priced.basePrice * (1 + a.marginPercent / 100),
-        // Same as the product's calculator: the credit's token volume is the
-        // sum of every model line's average tokens, unless the caller set one.
-        tokensPerCredit: a.tokensPerCredit ?? sumTokens(a.models),
-        ...(priced.bundle !== null ? { modelBundle: priced.bundle } : {}),
-        ...(a.description != null ? { description: a.description } : {}),
-      };
-    },
+    priceCreate: (args) => creditBody(cnk, args, true),
+    priceUpdate: (args) => creditBody(cnk, args, false),
     desc: {
-      list: "List the organisation's credit types (id, name, agentKey, price, active). Find a credit id to reference from a plan's CREDIT component.",
-      get: "Get one credit type in full by id — pricing, token mapping and active state.",
+      list: "List the organisation's credit types (id, name, agentKey, price, model bundle, active). Find a credit id to reference from a plan's CREDIT component.",
+      get: "Get one credit type's configuration by id — name, agentKey, description, pricing (base price, margin, price per credit, model bundle) and active state. Usage figures aren't returned.",
       create: [
         "Create a credit — a token-metered entitlement your product draws down against its `agentKey`.",
         "",
         "Rules:",
-        "- Price is model-grounded: give the `models` mixer + `marginPercent`; the tool reads live model prices and computes the base price + price-per-credit. Never hand-typed.",
+        "- Price is model-grounded: give the `models` mixer + `marginPercent`. The mixer is saved as the credit's model bundle and the server works out the base price and price-per-credit from the models' live prices. Never hand-typed.",
+        "- Each mixer line's input/output/cache/cacheWrite shares must total 100; cacheWritePct only on a model with a cache-write price.",
         "- Enable the models you price against first (clocknext_add_model / _list_models).",
-        "- Prefer the credits builder in the ClockNext product (https://payments.clocknext.com/credits) — its live preview shows the price as you build it. This tool saves the same per-model mix (models, average tokens, input/output/cache split), so the credit opens with its calculator filled in.",
-        "- A plan grants the credit via a CREDIT component referencing its id.",
+        "- Prefer the credits builder in the ClockNext product (https://payments.clocknext.com/credits) — its live preview shows the price as you build it. This tool saves the same per-model mix, so the credit opens with its calculator filled in.",
+        "- A plan grants the credit via a CREDIT component referencing its id. A name or agentKey already in use is refused (409).",
       ].join("\n"),
       update: [
-        "Replace a credit by id with its COMPLETE new definition.",
+        "Update a credit by id.",
         "",
         "Rules:",
-        "- Full rewrite, not a patch — omitted fields are cleared. Read it first with clocknext_get_credit.",
-        "- Pricing is re-grounded from the `models` mixer you pass (same as create). This tool has NO isActive field — to change active state use clocknext_archive_credit / clocknext_unarchive_credit.",
+        PARTIAL_UPDATE_RULE,
+        "- Send `models` to re-price from a new mixer; leave it out to keep the current price (a new marginPercent is applied on top of the stored base price).",
         "- Changing `agentKey` re-points which runtime signals map here — do it deliberately.",
       ].join("\n"),
       archive: [
-        "Deactivate a credit TYPE (sets isActive→false) — ClockNext's soft archive, NOT a delete.",
+        "Archive a credit TYPE (isActive→false) — the API never deletes; this is how it is retired.",
         "",
         "Rules:",
-        "- Recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it); it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_credit — the ONLY way, since clocknext_update_credit has no isActive field (unlike plans/outcomes/units).",
+        "- Recorded usage and any plan already granting it keep working (update those plans with clocknext_update_plan to stop offering it); it just can't be added to new plans or composites and drops out of active lists.",
+        "- Reversible: reactivate with clocknext_unarchive_credit.",
         "- Unrelated to archiving a customer, ending a purchase, or clearing a balance.",
       ].join("\n"),
     },
@@ -668,7 +786,6 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
   registerCrud(server, {
     resource: "outcome",
     plural: "outcomes",
-    updateHonoursIsActive: true,
     api: {
       list: (p) => cnk.outcomes.list(p),
       get: (id) => cnk.outcomes.get(id),
@@ -677,80 +794,35 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
       setActive: (id, a) => cnk.outcomes.setActive(id, a),
     },
     input: outcomeInput,
-    // Ground each step's price from its mixer; the outcome base is their sum.
-    priceInput: async (args) => {
-      const a = args as {
-        name: string;
-        agentKey: string;
-        description?: string | null;
-        isActive?: boolean;
-        marginPercent: number;
-        steps: { name: string; agentKey: string; models: MixerLine[] }[];
-      };
-      const steps: {
-        name: string;
-        agentKey: string;
-        basePrice: number;
-        modelBundle?: BundleEntry[];
-      }[] = [];
-      let total = 0;
-      for (const s of a.steps) {
-        const priced = await computeMixerBase(cnk, s.models);
-        if (!priced.ok) return { error: `Step "${s.name}": ${priced.error}` };
-        if (priced.basePrice <= 0) {
-          return {
-            error: `Step "${s.name}" priced to $0 — give it real token usage, or model a fixed-cost/non-LLM event as a UNIT instead of an outcome step.`,
-          };
-        }
-        steps.push({
-          name: s.name,
-          agentKey: s.agentKey,
-          basePrice: priced.basePrice,
-          ...(priced.bundle !== null ? { modelBundle: priced.bundle } : {}),
-        });
-        total += priced.basePrice;
-      }
-      return {
-        name: a.name,
-        // Required by POST/PATCH /api/v1/outcomes — the outcome's own org-wide
-        // key, separate from the step keys ingest resolves against.
-        agentKey: a.agentKey,
-        ...(a.description != null ? { description: a.description } : {}),
-        ...(a.isActive != null ? { isActive: a.isActive } : {}),
-        basePrice: total,
-        marginPercent: a.marginPercent,
-        pricePerOutcome: total * (1 + a.marginPercent / 100),
-        steps,
-      };
-    },
+    priceCreate: (args) => outcomeBody(cnk, args, true),
+    priceUpdate: (args) => outcomeBody(cnk, args, false),
     desc: {
-      list: "List the organisation's outcome types (id, name, price, active). Find an outcome id to reference from a plan's OUTCOME component.",
-      get: "Get one outcome type in full by id — its steps plus in-flight/completed stats.",
+      list: "List the organisation's outcome types (id, name, base price, price, active). Find an outcome id to reference from a plan's OUTCOME component.",
+      get: "Get one outcome type's configuration by id — name, agentKey, pricing, active state and every step (id, name, agentKey, order, base price, model bundle). Usage figures aren't returned.",
       create: [
         "Create an outcome — a multi-step LLM deliverable billed per COMPLETED outcome. Each of the 1–50 `steps` has its own `agentKey` and model mixer.",
         "",
         "Rules:",
         "- TWO kinds of agent key, both required and both unique org-wide, in separate namespaces: the outcome's own top-level `agentKey` (its identity), and each step's `agentKey` (what usage is reported against). Never reuse one as the other.",
-        "- Price is model-grounded: each step's base cost is computed from live model prices, summed, then `marginPercent` applied. Never hand-typed.",
+        "- Price is model-grounded: each step's mixer is saved as its model bundle; the server works out each step's base cost from live model prices, sums them, then applies `marginPercent`. Never hand-typed.",
         "- Every step is an LLM step. A fixed-cost / non-LLM event (an upload, an export) is a UNIT, not an outcome step.",
         "- Prefer the outcomes builder in the ClockNext product (https://payments.clocknext.com/outcomes); this is the fallback.",
         "- A plan grants it via an OUTCOME component referencing its id.",
       ].join("\n"),
       update: [
-        "Replace an outcome by id with its COMPLETE new definition.",
+        "Update an outcome by id.",
         "",
         "Rules:",
-        "- Full rewrite, not a patch — omitted steps/fields are dropped. Read it first with clocknext_get_outcome.",
-        "- The outcome's own `agentKey` is REQUIRED here too — pass back the existing one (clocknext_get_outcome returns it) unless you deliberately mean to change the outcome's identity.",
-        "- Each step's price is re-grounded from its `models` mixer (same as create).",
+        PARTIAL_UPDATE_RULE,
+        "- Leave `steps` out and the steps are untouched. If you send it, it is the complete step list: an existing step keeps its id when you pass that `id` (from clocknext_get_outcome) or the same agentKey; leave `models` out on an existing step to keep its price; stored steps you leave out are removed.",
         "- Step agent keys are the runtime binding — change them deliberately.",
       ].join("\n"),
       archive: [
         "Deactivate an outcome TYPE (sets isActive→false) — ClockNext's soft archive, NOT a delete.",
         "",
         "Rules:",
-        "- Steps and any in-flight/completed history are kept; existing plans and in-progress outcomes are unaffected; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_outcome. clocknext_update_outcome can also set isActive, but it rewrites the whole outcome (steps included) — use unarchive when all you want is to switch it back on.",
+        "- Steps and any in-flight/completed history are kept; existing plans and in-progress outcomes are unaffected; it just can't be added to new plans or composites and drops out of active lists.",
+        "- Reversible: reactivate with clocknext_unarchive_outcome.",
         "- Unrelated to archiving a customer or ending a purchase.",
       ].join("\n"),
     },
@@ -759,7 +831,6 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
   registerCrud(server, {
     resource: "unit",
     plural: "units",
-    updateHonoursIsActive: true,
     api: {
       list: (p) => cnk.units.list(p),
       get: (id) => cnk.units.get(id),
@@ -770,29 +841,30 @@ export function registerCatalogueTools(server: McpServer, cnk: ClockNextApi): vo
     input: unitInput,
     desc: {
       list: "List the organisation's unit types (id, name, pricing type, active). Find a unit id to reference from a plan's UNIT component.",
-      get: "Get one unit type in full by id — pricing type, flat price or tiers, plus usage stats.",
+      get: "Get one unit type's configuration by id — name, agentKey, pricing type, flat price or tiers, and active state. Usage figures aren't returned.",
       create: [
         "Create a unit — a metered usage unit for FIXED-COST / non-LLM events (an upload, an export, a seat): one event = one unit, no tokens.",
         "",
         "Rules:",
-        "- Price it FLAT (single `flatPrice` per event, default 0) or tiered (pricingType SLAB or VOLUME with `tiers`).",
-        "- Reported against a lowercased stable `agentKey` — its durable identity, unique org-wide.",
+        "- Price it FLAT (single `flatPrice` per event, default 0) or tiered (pricingType SLAB or VOLUME with `tiers` — limits rising, and the last tier upTo:null).",
+        "- Only a FLAT unit can go inside a composite.",
+        "- Reported against a lowercased stable `agentKey` — its durable identity, unique org-wide (409 if taken).",
         "- Prefer the units builder in the ClockNext product (https://payments.clocknext.com/units); this is the fallback.",
         "- A plan meters it via a UNIT component referencing its id.",
       ].join("\n"),
       update: [
-        "Replace a unit by id with its COMPLETE new definition.",
+        "Update a unit by id.",
         "",
         "Rules:",
-        "- Full rewrite, not a patch — omitted optional fields (description, tiers, flatPrice) are CLEARED. Read it first with clocknext_get_unit.",
+        PARTIAL_UPDATE_RULE,
         "- Changing `agentKey` re-points which runtime signals map here — do it deliberately.",
       ].join("\n"),
       archive: [
-        "Deactivate a unit TYPE (sets isActive→false) — ClockNext's soft archive, NOT a delete.",
+        "Archive a unit TYPE (isActive→false) — the API never deletes; this is how it is retired.",
         "",
         "Rules:",
-        "- Recorded usage is kept and existing plans metering it keep working; it just can't be added to new plans and drops out of active lists.",
-        "- Reversible: reactivate with clocknext_unarchive_unit. clocknext_update_unit can also set isActive, but it rewrites the whole unit — use unarchive when all you want is to switch it back on.",
+        "- Recorded usage is kept and existing plans metering it keep working; it just can't be added to new plans or composites and drops out of active lists.",
+        "- Reversible: reactivate with clocknext_unarchive_unit.",
         "- Unrelated to archiving a customer or ending a purchase.",
       ].join("\n"),
     },

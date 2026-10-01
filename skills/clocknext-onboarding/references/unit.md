@@ -20,8 +20,8 @@ them is the main thing to get right, so they're worked out side-by-side below.
 | `agentKey` | yes | Durable identity `[a-z0-9._-]`, **unique org-wide**; what the product reports consumption against. |
 | `pricingType` | yes | `FLAT` \| `SLAB` \| `VOLUME` (below). |
 | `flatPrice` | FLAT only | Price per event (default 0). |
-| `tiers` | SLAB/VOLUME only | **1–50 ordered tiers**, each `{ upTo, price }`. `upTo` is the tier's **inclusive** upper bound; **only the last tier may be `upTo: null`** (unbounded). |
-| `description`, `isActive` | no | Optional. |
+| `tiers` | SLAB/VOLUME only | **1–50 ordered tiers**, each `{ upTo, price }`. `upTo` is the tier's **inclusive** upper bound, rising tier by tier; **the last tier must be `upTo: null`** ("and above"), and only the last. |
+| `description` | no | Optional. (Active state isn't a field — use `clocknext_archive_unit` / `_unarchive_unit`.) |
 
 Unit prices are **set directly** (they aren't token-grounded) — there's no model mixer here.
 
@@ -33,8 +33,8 @@ Unit prices are **set directly** (they aren't token-grounded) — there's no mod
 - **VOLUME** — the **single tier the total quantity lands in** sets the rate for **all** units.
   `cost = quantity × (price of the tier the total lands in)`.
 
-Boundaries: a tier `upTo` is inclusive; the next band starts at `upTo + 1`. If quantity overflows
-a bounded last tier, SLAB charges the remainder at that last tier's price.
+Boundaries: a tier `upTo` is inclusive; the next band starts at `upTo + 1`. The last tier is
+always "and above", so every quantity lands in a band.
 
 ### FLAT worked example
 `flatPrice = $4`. 7 events → `7 × 4 = $28`.
@@ -78,5 +78,6 @@ See [`plans.md`](plans.md).
   **single** fee. See [`plans.md`](plans.md).
 - **Using a unit for token usage.** Token-shaped spend is a [credit](credit.md).
 - **Mixing up SLAB and VOLUME.** Re-read the table — the difference is large past tier 1.
-- **A non-last tier with `upTo: null`.** Only the final tier may be unbounded.
+- **A non-last tier with `upTo: null`, or a capped last tier.** The final tier — and only it —
+  is `upTo: null`.
 - **Metering units through the MCP.** It's the product's job at runtime.

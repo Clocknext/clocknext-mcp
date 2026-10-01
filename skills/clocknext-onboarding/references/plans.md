@@ -1,7 +1,8 @@
 # Plan — what a customer subscribes to
 
 A **plan** bundles the building blocks into what a customer actually buys and pays. It's a list
-of **components** plus a billing cycle and currency. A purchase (subscription) raises a real
+of **entitlements** (sent as `entitlements`) plus a billing cycle; its currency is the
+workspace's primary currency. A purchase (subscription) raises a real
 invoice, so plans are the last thing you build before the real-money gates (Gate 1 = the
 purchase, Gate 2 = the first real signal — [SKILL.md](../SKILL.md) S17 and S28, each asked
 alone).
@@ -16,15 +17,20 @@ Each component is one of six types, in one of two billing modes.
 | **CREDIT** | `creditId` | Grant a `quantity` of [credits](credit.md) up-front. | Meter actual credit usage. |
 | **OUTCOME** | `outcomeId` | Grant a `quantity` of [outcomes](outcome.md) up-front. | Bill each completed outcome. |
 | **UNIT** | `unitId` | Prepay a `quantity` of [units](unit.md) (priced through tiers). | Meter actual unit events. |
-| **PRICING_METRIC** | `pricingMetricId` | Prepay a POOL of `quantity` [composite](composite.md) occurrences — slots shared across whichever wrapped items each occurrence uses. | Count completed occurrences at cycle end. |
+| **PRICING_METRIC** | `compositeId` | Prepay a POOL of `quantity` [composite](composite.md) occurrences — slots shared across whichever wrapped items each occurrence uses. | Count completed occurrences at cycle end. |
 
-- **ADVANCE** = billed **up-front for the cycle**; needs `amount` (WALLET/FLAT) or `quantity`
-  (CREDIT/OUTCOME/UNIT/PRICING_METRIC).
+- **ADVANCE** = billed **up-front for the cycle**; grants `amount` (WALLET/FLAT) or `quantity`
+  (CREDIT/OUTCOME/UNIT/PRICING_METRIC). A FLAT fee must be above $0; a $0 WALLET and a
+  quantity of 0 are allowed.
+- **`rollover: true`** on an ADVANCE CREDIT / OUTCOME / PRICING_METRIC / WALLET line carries
+  what's left into the next cycle instead of resetting it. Ignored for UNIT, FLAT, ARREAR lines
+  and on FREE plans.
 - **ARREAR** = **metered**, billed for what was consumed (at cycle end, or from the wallet if
   [`walletFundedArrear`](wallet.md) is on).
 - CREDIT/OUTCOME/UNIT components reference an **existing** catalogue entitlement by id, and
-  PRICING_METRIC references an **existing** composite by `pricingMetricId` — **create those
-  first**. WALLET and FLAT exist only here, not in the catalogue.
+  PRICING_METRIC references an **existing** composite by `compositeId` (the older
+  `pricingMetricId` is still accepted) — **create those first**. Every item must be **active**
+  to be added. WALLET and FLAT exist only here, not in the catalogue.
 - At most **one WALLET** and **one FLAT** component per plan; each credit/outcome/unit at most once.
 - **PRICING_METRIC is how a [composite](composite.md) gets billed** — the wire still uses that
   older name for it. The composite must exist first (`clocknext_create_composite`), and
@@ -36,17 +42,21 @@ Each component is one of six types, in one of two billing modes.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `name` | yes | Plan name. |
-| `billingCycle` | yes | `MONTHLY` \| `QUARTERLY` \| `SEMI_ANNUAL` \| `YEARLY` \| `EVERY_5_MIN` \| `FREE`. `EVERY_5_MIN` is **testing-only** (cycles the whole invoice→payment→renewal loop in minutes, e.g. on sandbox) — never offer it for a real plan. |
-| `components` | yes | ≥1 component (table above). |
-| `currencyCode` | no | ISO 4217, default USD. |
-| `isActive` | no | Sellable or not (default active). |
+| `billingCycle` | yes | `MONTHLY` \| `QUARTERLY` \| `SEMI_ANNUAL` \| `YEARLY` \| `FREE`. |
+| `entitlements` | yes | ≥1 line (table above). |
 | `walletFundedArrear` | no | Pay metered usage from the prepaid wallet as it happens — see [`wallet.md`](wallet.md). Default false. |
 | `priceAdjustment` | no | Signed rounding nudge (USD) on the due-at-purchase total; default 0 (coerced to 0 for FREE / all-ARREAR plans). |
 | `carryForward` | no | **Deprecated** — accepted but ignored by the billing engine. |
 
-**Update is a full rewrite** (`clocknext_update_plan`) — send the complete definition (read it
-first with `clocknext_get_plan`); omitted fields are dropped, and `walletFundedArrear` reverts to
-false unless re-sent. **Archive** (`clocknext_archive_plan`) is a reversible soft-deactivate.
+There is no `currencyCode`: a plan always uses the workspace's primary currency (Settings →
+Organization → Currencies, USD when none is set). There is no `isActive` either — a new plan is
+active, and active state only changes through archive / unarchive.
+
+**Update is partial** (`clocknext_update_plan`) — pass the id plus only the fields to change;
+everything left out keeps its stored value. `entitlements`, if sent, is the complete new list:
+the easiest edit is to read it with `clocknext_get_plan`, change the list, and send it back
+as-is (`compositeId` and `rollover` included). Nothing is ever deleted: **archive**
+(`clocknext_archive_plan`) retires a plan and `clocknext_unarchive_plan` restores it.
 
 ## Due-at-purchase cost (verified) — only ADVANCE components count
 

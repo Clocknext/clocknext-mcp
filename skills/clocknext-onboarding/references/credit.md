@@ -19,19 +19,25 @@ Fields (see also the mixer in [`pricing-and-models.md`](pricing-and-models.md)):
 | --- | --- | --- |
 | `name` | yes | Human label. |
 | `agentKey` | yes | **Durable identity** — the lowercased stable key `[a-z0-9._-]` your product sends when recording usage. A rename never changes it; it must be unique across the organization. |
-| `models` | yes | The **model mixer**: 1+ enabled models, each with `avgTokens` and an `inputPct`/`outputPct`/`cachePct` split that totals 100. Grounds the price. |
-| `marginPercent` | yes | Markup over the computed base cost. `100` = double the base = price per credit. `0` = at cost. |
-| `tokensPerCredit` | no | How many tokens map to one credit (default 0). A display/allowance convenience; the actual money draw-down is cost-based (below). |
+| `models` | yes | The **model mixer**: 1+ enabled models, each with `avgTokens` and an `inputPct`/`outputPct`/`cachePct`/`cacheWritePct` split that totals 100 (`cacheWritePct` only on a model with a cache-write price). Grounds the price. |
+| `marginPercent` | yes | Markup over the computed base cost. `100` = double the base = price per credit. `0` = at cost; negative discounts (down to `-100` = free). |
 | `description` | no | Optional. |
 
-The tool reads live model prices, **computes `basePrice` and `pricePerCredit` for you**, and
-rejects a disabled/unknown model or a split ≠ 100. You never hand-type a price.
+The mixer is saved as the credit's model bundle, and **ClockNext works out `basePrice` and
+`pricePerCredit` from it** at the models' live prices; a disabled/unknown model, a split ≠ 100
+or a cache-write share on a model without a cache-write price is rejected. You never hand-type
+a price. The credit's token volume (`tokensPerCredit`) is the sum of the mixer's tokens — a
+display figure; the money draw-down is cost-based (below).
+
+**Update is partial** (`clocknext_update_credit`): pass the id plus only the fields to change.
+Send `models` to re-price; leave it out to keep the current base price.
 
 ## Pricing mechanics (verified against the billing engine)
 
 **Base price** = the whole mixer's real provider cost, in USD (no margin):
 
-    basePrice = Σ  (avgTokens·inputPct%·inputPrice + avgTokens·outputPct%·outputPrice + avgTokens·cachePct%·cachePrice) / 1e6
+    basePrice = Σ  (avgTokens·inputPct%·inputPrice + avgTokens·outputPct%·outputPrice
+                  + avgTokens·cachePct%·cachePrice + avgTokens·cacheWritePct%·cacheWritePrice) / 1e6
 
 (prices are USD per 1,000,000 tokens). Then:
 

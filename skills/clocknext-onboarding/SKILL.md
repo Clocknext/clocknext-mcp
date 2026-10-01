@@ -203,8 +203,8 @@ cannot be read by MCP, direct the user to the ClockNext product and ask them to 
 scheduled purchase. Report what exists so everything downstream
 reuses instead of duplicating. If an entitlement exists but is archived/inactive, the fix
 later is `clocknext_unarchive_credit`/`_unit`/`_outcome`/`_plan` — NOT an update:
-**the backend ignores `isActive` on a full edit, so an update "reactivation" silently does
-nothing.** NEVER create a second entitlement on an occupied agentKey — agentKeys are
+**no update tool takes `isActive` — archive / unarchive are the only way to change active
+state.** NEVER create a second entitlement on an occupied agentKey — agentKeys are
 unique org-wide.
 
 Do not select or reuse a customer in S3. The proof flow creates one newly named throwaway
@@ -256,13 +256,13 @@ pricing or explaining a type):
 - **Composite** — several of the above bundled and billed as ONE thing, per completed
   occurrence ("$2 per call", where a call is 2 credits + 4 units). Only offer it once the
   individual meters are settled — it is priced on top of them. Two steps, and the second is
-  the one people forget: creating a composite charges nobody, a plan has to SELL it. And it
-  is **the one thing here you cannot edit afterwards** — no update, no archive, only in the
-  ClockNext product — so confirm the whole definition before creating. Deep: `references/composite.md`.
+  the one people forget: creating a composite charges nobody, a plan has to SELL it. Its
+  `refId` is costly to change later (a rename silently cuts live traffic over), so confirm
+  the whole definition before creating. Deep: `references/composite.md`.
 
 S8 asks which they want (recommendation vs their own choice) — one question.
 S9 **sketches before creating**: name, what it bills, the model mixer grounding (model,
-avg tokens, input/output/cache split estimated from the code) and the pricing assumptions,
+avg tokens, input/output/cache/cache-write split estimated from the code) and the pricing assumptions,
 in plain words. Any outstanding decision (e.g. the markup) is its own question, one per
 turn. **Never create first and explain pricing afterward. Never invent a price, never
 hand-type a token-metered base price — the mixer computes it** (live preview in the ClockNext product on

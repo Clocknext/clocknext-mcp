@@ -18,10 +18,9 @@ event (an upload, an export), that's a [unit](unit.md) — **not** an outcome st
 | --- | --- | --- |
 | `name` | yes | Human label. |
 | `agentKey` | yes | The **outcome's own** stable key. Unique org-wide, `[a-z0-9._-]`. |
-| `marginPercent` | yes | Markup over the **summed** step base costs. `100` = double. |
+| `marginPercent` | yes | Markup over the **summed** step base costs. `100` = double; negative discounts (down to `-100`). |
 | `steps` | yes | **1–50 steps.** Each has its own `name`, its own `agentKey`, and its own **model mixer** (`models`). |
 | `description` | no | Optional. |
-| `isActive` | no | Sellable or not. |
 
 > **Two different agent keys — don't conflate them.** The outcome carries its own
 > `agentKey` (its identity, mirroring a credit's), and every step carries its own. They live
@@ -76,6 +75,7 @@ See [`plans.md`](plans.md).
   `agentKey` must also be unique across the organization.
 - **Forgetting the outcome's own `agentKey`**, or reusing a step's key for it. Both are
   required, both are org-wide unique, and they are not interchangeable.
-- **Dropping `agentKey` on `clocknext_update_outcome`.** Update is a full rewrite, so pass
-  the existing outcome key back (read it with `clocknext_get_outcome`) unless you truly mean
-  to change the outcome's identity.
+- **Re-sending steps you didn't mean to change.** `clocknext_update_outcome` is partial: leave
+  `steps` out and the steps are untouched. If you do send `steps`, it is the complete list —
+  pass each existing step's `id` (from `clocknext_get_outcome`) or its same `agentKey` so it
+  keeps its identity; a step left out is removed.

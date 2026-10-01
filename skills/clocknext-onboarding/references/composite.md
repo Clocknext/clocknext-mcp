@@ -35,7 +35,7 @@ from a catalogue entry. There are two steps and both are required:
 1. **`clocknext_create_composite`** — defines what the bundle is and what one occurrence
    costs.
 2. **Sell it on a plan** — `clocknext_create_plan` / `clocknext_update_plan` with a
-   component of type `PRICING_METRIC` whose `pricingMetricId` is the composite's **`id`**
+   component of type `PRICING_METRIC` whose `compositeId` is the composite's **`id`**
    (not its `refId` — the plan wants the id, the signal wants the refId), plus a
    `billingMode` and (for ADVANCE) a `quantity`.
 
@@ -50,31 +50,31 @@ way for this feature to silently do nothing.
 | `name` | yes | Human label, e.g. "Voice AI call". |
 | `refId` | yes | The tag identity the product's code sends. Lowercased, `[a-z0-9._-]`, unique org-wide. **May not collide** with a field the ingest body owns (`customerId`, `usage`, `agentKey`, `runId`, `member`, `custom`, `composite`, …) — refused at create time. |
 | `price` | yes | USD for **one completed occurrence**, once a plan sells it. Ask the user; never invent it. |
-| `creditIds` / `outcomeIds` / `unitIds` | **at least one, combined** | What the bundle is made of. Pass **ids**, from `clocknext_list_credits` / `clocknext_list_outcomes` / `clocknext_list_units`. |
+| `creditIds` / `outcomeIds` / `unitIds` | **at least one, combined** | What the bundle is made of. Pass **ids**, from `clocknext_list_credits` / `clocknext_list_outcomes` / `clocknext_list_units`. Every item must be active, and a unit must be FLAT-priced. |
 | `description` | no | Optional note. |
 
 The entitlement set is the composite's **restriction**: only signals naming something in
 that set may carry its tag. It is required precisely because a composite restricted to
 nothing would absorb every signal in the organisation.
 
-### You cannot edit a composite. At all.
-There is **no update and no archive** on the public API — `clocknext_list_composites` and
-`clocknext_create_composite` are the only two tools that exist. The moment create succeeds,
-**everything** is frozen: `name`, `refId`, `price`, `description` and which items it wraps.
-Fixing any of them means doing it manually in the ClockNext product
-(`{base}/pricing-metrics`).
-
-So **read the full definition back and get an explicit yes before you call create** — this
-is the one catalogue object you get a single attempt at. If the user later asks to change a
-composite, don't go looking for a tool and **don't create a second one as a workaround**
-(the old one keeps resolving at ingest, and you end up with two live bundles). Say plainly
-that composites can only be edited manually in the ClockNext product, and point them there.
+### Changing or retiring a composite
+- **`clocknext_get_composite`** reads one back in full.
+- **`clocknext_update_composite`** is a partial update: pass the id plus only what changes.
+  Each of `creditIds` / `outcomeIds` / `unitIds` you pass is the complete new list for that
+  kind; a kind you leave out keeps its items.
+- **Renaming `refId` cuts live traffic over at once** — signals still sending the old tag go
+  untagged, silently. Ship the new tag in the product's code first, then rename. So still
+  read the definition back and get a yes before create: `refId` is the one field that is
+  costly to change later.
+- **`clocknext_archive_composite`** / **`clocknext_unarchive_composite`** retire and restore
+  it. There is no delete. **Don't create a second composite as a workaround** — the old one
+  keeps resolving at ingest, and you end up with two live bundles.
 
 ## The two billing modes
 
 | Mode | `quantity` means | Behaviour |
 | --- | --- | --- |
-| **ADVANCE** | a **prepaid pool of slots** | Each distinct tag value claims one slot when its occurrence completes. Repeat signals under the same value reuse the slot already claimed, at no extra cost. The pool is **shared** across whichever wrapped items each occurrence used. Once every slot is claimed, further occurrences are refused rather than billed. The pool resets each cycle. |
+| **ADVANCE** | a **prepaid pool of slots** | Each distinct tag value claims one slot when its occurrence completes. Repeat signals under the same value reuse the slot already claimed, at no extra cost. The pool is **shared** across whichever wrapped items each occurrence used. Running past the pool is allowed: the overdraw carries as debt into the next cycle's pool, like an overdrawn credit. The pool resets each cycle. |
 | **ARREAR** | nothing prepaid | Completed occurrences are counted on the cycle-end line. |
 
 ## At runtime — two calls, and the second one is the one people forget

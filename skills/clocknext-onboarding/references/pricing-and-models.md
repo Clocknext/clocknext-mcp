@@ -18,16 +18,18 @@ Either way:
 ## How a price is built — the model mixer (credits + outcome steps)
 A credit / outcome-step price is **grounded in a model**, never typed by hand. You supply a
 **mixer**: one or more enabled models, each with the **avg total tokens** it uses and an
-**input / output / cache percentage split** (the three total 100). The base cost is those
+**input / output / cache / cache-write percentage split** (the four total 100; cache-write only
+on a model that has a cache-write price). The base cost is those
 tokens priced at the model's live per-1M-token rates, summed; then margin:
 
-    basePrice       = Σ  avgTokens × (inputPct·inputPrice + outputPct·outputPrice + cachePct·cachePrice) / 1e6
+    basePrice       = Σ  avgTokens × (inputPct·inputPrice + outputPct·outputPrice
+                                     + cachePct·cachePrice + cacheWritePct·cacheWritePrice) / 1e6
     pricePerCredit  = basePrice × (1 + marginPercent / 100)
     pricePerOutcome = (Σ step basePrices) × (1 + marginPercent / 100)
 
 Both ways the user can choose compute this for them — neither lets a raw price be typed:
 - **Set it up using AI** — `create_credit` takes
-  `models: [{ model, avgTokens, inputPct, outputPct, cachePct }]` + `marginPercent`;
+  `models: [{ model, avgTokens, inputPct, outputPct, cachePct, cacheWritePct }]` + `marginPercent`;
   `create_outcome` takes the same mixer **per step**. The tool reads live prices via
   `list_models`, computes the base + price, and **rejects a turned-off / unknown model or a
   split that isn't 100** — so an MCP-made entitlement is always model-grounded.

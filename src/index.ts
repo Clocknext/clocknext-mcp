@@ -22,14 +22,14 @@ import { registerWriteEnv } from "./tools/write-env";
 async function main(): Promise<void> {
   const cnk = makeClient(); // throws with a clear message if the key is missing
 
-  const server = new McpServer({ name: "clocknext", version: "0.11.0" });
+  const server = new McpServer({ name: "clocknext", version: "0.12.0" });
 
   registerWhoami(server, cnk);
   registerListModels(server, cnk);
   registerSearchDocs(server); // docs are public — no API key needed
   registerGetDoc(server); // reads a full docs page; also no API key needed
   registerCatalogueTools(server, cnk); // CRUD for plans/credits/outcomes/units
-  registerCompositeTools(server, cnk); // list/create composites (no update/archive on the public API)
+  registerCompositeTools(server, cnk); // list/get/create/update/archive composites (no delete on the public API)
   registerCustomerTools(server, cnk); // customers, purchases, bulk import
   registerAddModel(server, cnk); // enable a model (autopriced); reads price back to warn on $0
   registerWriteEnv(server); // writes the cnk_ key into a project .env server-side — key never enters context

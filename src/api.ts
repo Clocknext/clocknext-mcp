@@ -1,11 +1,11 @@
 /**
  * The MCP's own ClockNext API client — plain `fetch`, no `@clocknext/sdk`.
  *
- * Why this exists: most of what the MCP does (enable models, define credits /
- * outcomes / units / composites, build plans) is NOT part of the public SDK or
- * the public API reference. The SDK only covers the documented endpoints, so
- * the MCP talks to the `/api/v1` routes it needs directly through this one
- * client instead of depending on SDK methods that no longer exist.
+ * Why this exists: the MCP stays self-contained rather than depending on
+ * `@clocknext/sdk`. The catalogue calls here (credits / outcomes / units /
+ * composites / plans) ARE public — documented in the API reference and in the
+ * SDK since 2026-10-01 — and must match that contract; enabling models is the
+ * one thing that stays MCP-only. All `/api/v1` calls go through this client.
  *
  * It behaves the way the SDK's own transport did, so tool results and error
  * messages stay the same:
@@ -177,10 +177,13 @@ export interface Model {
   inputPrice: number;
   outputPrice: number;
   cachePrice: number;
+  /** Per-1M-token cache-WRITE price, or null when the model has none. */
+  cacheWritePrice?: number | null;
   [key: string]: unknown;
 }
 
-/** Body of `POST /api/v1/composites`. */
+/** Body of `POST /api/v1/composites` (and, every field optional, of
+ *  `PATCH /api/v1/composites/:id`). */
 export interface CreateCompositeInput {
   name: string;
   refId: string;
@@ -371,12 +374,14 @@ export class ClockNextApi {
     },
   };
 
-  // --- Catalogue: credits / outcomes / units / plans -----------------------
+  // --- Catalogue: credits / outcomes / units / plans / composites ----------
 
   readonly credits = this.catalogue("/api/v1/credits", "credits", "credit");
   readonly outcomes = this.catalogue("/api/v1/outcomes", "outcomes", "outcome");
-  readonly units = this.catalogue("/api/v1/units-catalog", "units", "unit");
+  readonly units = this.catalogue("/api/v1/units", "units", "unit");
   readonly plans = this.catalogue("/api/v1/plans", "plans", "plan");
+  /** Composites have no DELETE on the API — retire one by archiving it. */
+  readonly composites = this.catalogue("/api/v1/composites", "composites", "composite");
 
   /**
    * The same five calls for every catalogue resource. `listKey` / `itemKey`
@@ -414,7 +419,7 @@ export class ClockNextApi {
         return result[itemKey];
       },
 
-      /** `PATCH <base>/:id` — a full rewrite, not a patch. */
+      /** `PATCH <base>/:id` — a partial update: only the fields sent change. */
       update: async (id: string, input: unknown): Promise<unknown> => {
         const result = await this.request<Record<string, unknown>>({
           method: "PATCH",
@@ -424,41 +429,19 @@ export class ClockNextApi {
         return result[itemKey];
       },
 
-      /** `PATCH <base>/:id` with only `{ isActive }` — archive / unarchive. */
+      /** `POST <base>/:id/archive` (false) or `POST <base>/:id/unarchive`
+       *  (true) — the only way to change an item's active state; nothing is
+       *  ever deleted through the API. */
       setActive: async (id: string, isActive: boolean): Promise<unknown> => {
+        const action = isActive ? "unarchive" : "archive";
         const result = await this.request<Record<string, unknown>>({
-          method: "PATCH",
-          path: idPath(basePath, id),
-          body: { isActive },
+          method: "POST",
+          path: `${idPath(basePath, id)}/${action}`,
         });
         return result[itemKey];
       },
     };
   }
-
-  // --- Composites (list + create only; there is no update or archive) ------
-
-  readonly composites = {
-    /** `GET /api/v1/composites`. */
-    list: async (params: { active?: boolean } = {}): Promise<unknown[]> => {
-      const result = await this.request<{ composites: unknown[] }>({
-        method: "GET",
-        path: "/api/v1/composites",
-        query: activeQuery(params),
-      });
-      return result.composites;
-    },
-
-    /** `POST /api/v1/composites`. */
-    create: async (input: CreateCompositeInput): Promise<unknown> => {
-      const result = await this.request<{ composite: unknown }>({
-        method: "POST",
-        path: "/api/v1/composites",
-        body: input,
-      });
-      return result.composite;
-    },
-  };
 
   // --- Customers ------------------------------------------------------------
 

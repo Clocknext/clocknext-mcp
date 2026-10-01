@@ -4,15 +4,14 @@ import type { ClockNextApi } from "../api";
 import { errMsg, errorResult, jsonResult } from "./util";
 
 /**
- * Composite catalogue tools — list and create the bundles that are grouped
- * under one tag and billed as a single thing.
+ * Composite catalogue tools — list, get, create, update and archive / unarchive
+ * the bundles that are grouped under one tag and billed as a single thing.
  *
- * These live outside `catalogue.ts` on purpose. That file generates four
- * identical CRUD sets (create / get / list / update / archive / unarchive)
- * from one factory, and a composite has no update or archive endpoint on the
- * public API — only list and create. Bending the factory to emit two of six
- * tools for one resource would make the other four look like an oversight
- * rather than a deliberate absence.
+ * These live outside `catalogue.ts` because a composite's inputs don't fit
+ * that factory: it takes the wrapped items as three id lists rather than one
+ * nested object, and an update that changes one of those lists has to read
+ * the other two back first (the API replaces the item set whole). There is no
+ * delete on the public API — a composite is retired by archiving it.
  *
  * The money boundary an agent has to understand: creating a composite prices
  * it but charges nobody. An invoice is built from plan components, never from
@@ -26,14 +25,14 @@ export function registerCompositeTools(server: McpServer, cnk: ClockNextApi): vo
     {
       title: "ClockNext: list composites",
       description: [
-        "List the organisation's composites — bundles of credits / outcomes / units grouped under one tag and billed as ONE thing. Returns each composite's `id` (what a plan's PRICING_METRIC component sends as pricingMetricId) and `refId` (what the product's code puts in a signal's composite tag), plus the catalogue items it is restricted to, with their agentKeys.",
+        "List the organisation's composites — bundles of credits / outcomes / units grouped under one tag and billed as ONE thing. Returns each composite's `id` (what a plan's PRICING_METRIC component sends as compositeId) and `refId` (what the product's code puts in a signal's composite tag), plus the catalogue items it is restricted to, with their agentKeys.",
         "",
         "Rules:",
         "- Call this BEFORE tagging any signal with a composite: only a live composite's refId resolves, and a tag naming nothing is silently ignored rather than rejected — so a typo looks exactly like success.",
-        "- Call it BEFORE clocknext_create_plan / clocknext_update_plan too: the `id` here is what a PRICING_METRIC component references as pricingMetricId. `id` and `refId` are NOT interchangeable — the plan wants the id, the signal wants the refId.",
+        "- Call it BEFORE clocknext_create_plan / clocknext_update_plan too: the `id` here is what a PRICING_METRIC component references as compositeId. `id` and `refId` are NOT interchangeable — the plan wants the id, the signal wants the refId.",
         "- A composite is restricted to a set of credits/outcomes/units. Only signals naming something in that set may carry its tag. Empty lists mean unrestricted (legacy rows only).",
         "- Pass active=true for only the ones a new signal can still be tagged with. Archived composites keep every row they already own.",
-        "- READ-ONLY resource beyond create: there is no update and no archive tool for composites. If the user wants one changed, say so plainly and send them to the ClockNext product (https://payments.clocknext.com/pricing-metrics) — never create a second composite as a workaround, since the old one keeps resolving and both stay live.",
+        "- To change one, use clocknext_update_composite; to retire one, clocknext_archive_composite. Never create a second composite as a workaround — the old one keeps resolving and both stay live.",
       ].join("\n"),
       inputSchema: {
         active: z
@@ -65,11 +64,11 @@ export function registerCompositeTools(server: McpServer, cnk: ClockNextApi): vo
         "",
         "Rules:",
         "- `refId` is the integration contract: it is what the product's code sends as a signal's compositeRef. Lowercased; letters, digits, _ and - only. It may NOT collide with a field the ingest body already owns (customerId, usage, agentKey, runId, member, custom, composite, …) — a collision is refused here, not silently ignored later.",
-        "- `entitlements` is REQUIRED — at least one credit / outcome / unit id. A composite restricted to nothing would accept every signal in the organisation. Get the ids from clocknext_list_credits / clocknext_list_outcomes / clocknext_list_units (ids, not agentKeys).",
+        "- `entitlements` is REQUIRED — at least one credit / outcome / unit id. A composite restricted to nothing would accept every signal in the organisation. Get the ids from clocknext_list_credits / clocknext_list_outcomes / clocknext_list_units (ids, not agentKeys). Every item must be active, and a unit must be FLAT-priced.",
         "- `price` is what ONE occurrence costs once a plan sells this. Creating a composite CHARGES NOBODY: an invoice is built from plan components, never from a catalogue entry.",
-        "- To actually bill it, add it to a plan with clocknext_create_plan / clocknext_update_plan as a component of type PRICING_METRIC (the wire still uses the old name), passing the id this tool returns as `pricingMetricId`, plus a billingMode and, for ADVANCE, a quantity — that quantity is a prepaid pool of slots shared across the wrapped items. Tell the user this second step is required, or they will wonder why a composite they created bills nothing.",
-        "- A composite CANNOT BE EDITED once created — not from this tool, not from any tool here. There is no update and no archive on the public API: name, refId, price, description and which items it wraps are all frozen the moment this call succeeds. Changing any of them means doing it manually in the ClockNext product (https://payments.clocknext.com/pricing-metrics).",
-        "- So get it right the FIRST time: read the whole definition back to the user and get an explicit yes before calling this. If they later ask you to change a composite, do not hunt for a tool and do not create a near-duplicate — say plainly that composites can only be edited manually in the ClockNext product, and point them there.",
+        "- To actually bill it, add it to a plan with clocknext_create_plan / clocknext_update_plan as a component of type PRICING_METRIC (the wire still uses the old name), passing the id this tool returns as `compositeId`, plus a billingMode and, for ADVANCE, a quantity — that quantity is a prepaid pool of slots shared across the wrapped items. Tell the user this second step is required, or they will wonder why a composite they created bills nothing.",
+        "- It can be changed later with clocknext_update_composite — but renaming `refId` cuts live traffic over at once (signals still sending the old tag go untagged, silently), so get refId right first time.",
+        "- A name or refId already in use is refused (409).",
       ].join("\n"),
       inputSchema: {
         name: z
@@ -140,6 +139,127 @@ export function registerCompositeTools(server: McpServer, cnk: ClockNextApi): vo
             },
           }),
         );
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    "clocknext_get_composite",
+    {
+      title: "ClockNext: get composite",
+      description:
+        "Get one composite in full by id — name, refId, price, description, active state, and the credits / outcomes / units it wraps (with their agentKeys).",
+      inputSchema: { id: z.string().describe("The composite id (from clocknext_list_composites).") },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ id }) => {
+      try {
+        return jsonResult(await cnk.composites.get(id));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    "clocknext_update_composite",
+    {
+      title: "ClockNext: update composite",
+      description: [
+        "Update a composite by id.",
+        "",
+        "Rules:",
+        "- Partial update: pass the id plus ONLY the fields to change; everything you leave out keeps its stored value.",
+        "- creditIds / outcomeIds / unitIds: each list you pass is the complete new list for that kind; a kind you leave out keeps its current items. The composite must still wrap at least one item. Items it already wraps may stay even if since archived; a newly added one must be active (and a unit FLAT-priced).",
+        "- Renaming `refId` cuts ingest over at once: signals still sending the old tag go untagged, silently. Ship the new tag in the product's code first, then rename.",
+        "- A new `price` applies to purchases made after the change; existing purchases keep the price they were bought at.",
+      ].join("\n"),
+      inputSchema: {
+        id: z.string().describe("The composite id to update."),
+        name: z.string().min(1).max(80).optional().describe("New name."),
+        refId: z.string().min(1).max(80).optional().describe("New tag identifier — see the rename rule."),
+        price: z.number().min(0).optional().describe("New USD price per completed occurrence."),
+        description: z.string().max(400).nullish().describe("New description (null clears it)."),
+        creditIds: z.array(z.string()).optional().describe("Complete new list of wrapped credit ids."),
+        outcomeIds: z.array(z.string()).optional().describe("Complete new list of wrapped outcome ids."),
+        unitIds: z.array(z.string()).optional().describe("Complete new list of wrapped unit ids."),
+      },
+      annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ id, name, refId, price, description, creditIds, outcomeIds, unitIds }) => {
+      try {
+        const body: Record<string, unknown> = {};
+        if (name !== undefined) body.name = name;
+        if (refId !== undefined) body.refId = refId;
+        if (price !== undefined) body.price = price;
+        if (description !== undefined) body.description = description;
+
+        // The API replaces the wrapped-item set whole, so a list the agent
+        // didn't pass is filled in from the composite as it is now.
+        if (creditIds !== undefined || outcomeIds !== undefined || unitIds !== undefined) {
+          const current = (await cnk.composites.get(id)) as {
+            entitlements?: {
+              credits?: { id: string }[];
+              outcomes?: { id: string }[];
+              units?: { id: string }[];
+            };
+          };
+          const ids = (rows: { id: string }[] | undefined) => (rows ?? []).map((r) => r.id);
+          body.entitlements = {
+            creditIds: creditIds ?? ids(current.entitlements?.credits),
+            outcomeIds: outcomeIds ?? ids(current.entitlements?.outcomes),
+            unitIds: unitIds ?? ids(current.entitlements?.units),
+          };
+        }
+
+        if (Object.keys(body).length === 0) {
+          return errorResult("Nothing to update — pass the composite id plus at least one field to change.");
+        }
+        return jsonResult(await cnk.composites.update(id, body));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    "clocknext_archive_composite",
+    {
+      title: "ClockNext: archive composite",
+      description: [
+        "Archive a composite (isActive→false) — the API never deletes; this is how a composite is retired.",
+        "",
+        "Rules:",
+        "- New signals stop resolving to it (a tag naming it is then ignored); every row it already owns keeps pointing at it, so its history stays intact.",
+        "- Plans already selling it are unaffected — update those plans with clocknext_update_plan to stop selling it.",
+        "- Reversible: reactivate with clocknext_unarchive_composite.",
+      ].join("\n"),
+      inputSchema: { id: z.string().describe("The composite id to archive.") },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ id }) => {
+      try {
+        return jsonResult(await cnk.composites.setActive(id, false));
+      } catch (err) {
+        return errorResult(errMsg(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    "clocknext_unarchive_composite",
+    {
+      title: "ClockNext: unarchive composite",
+      description:
+        "Reactivate an archived composite (sets isActive→true) — the reverse of clocknext_archive_composite. Same refId, same wrapped items; its tag resolves again for new signals. Prefer this over creating a replacement.",
+      inputSchema: { id: z.string().describe("The composite id to reactivate.") },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ id }) => {
+      try {
+        return jsonResult(await cnk.composites.setActive(id, true));
       } catch (err) {
         return errorResult(errMsg(err));
       }
