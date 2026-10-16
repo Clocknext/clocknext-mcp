@@ -434,8 +434,9 @@ call the run itself proof: ingest is asynchronous, so "the code ran" is not "the
 billed".
 
 ### S30 · Verify usage and balance
-Separately call `clocknext_get_customer_usage` (the log landed with expected
-model/tokens/cost) and `clocknext_get_customer_balances` (balance moved where applicable;
+Separately read the usage log back through the product's SDK, `signals.usageLog({ customerId })`
+(the log landed with expected model/tokens/cost) — the MCP has no usage-read tool — and call
+`clocknext_get_customer_balances` (balance moved where applicable;
 Unit event count changes are used for Units). Unit
 consumption is confirmed through the product's supported Unit usage/event-count readback — the
 MCP has no unit-event tool and an ARREAR Unit may have no balance decrement. “Sent” is not proof;

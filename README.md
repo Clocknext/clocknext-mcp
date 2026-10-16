@@ -243,7 +243,6 @@ No manual config, no env vars, nothing to build.
 | `clocknext_whoami` | Identify the org behind the key and whether it's **sandbox** or **live**. Call first. |
 | `clocknext_list_models` | List enabled models + USD prices per 1M tokens. Use a `modelId` in signals. |
 | `clocknext_add_model` | Enable a catalog model (autopriced); warns if it has no catalog price. |
-| `clocknext_get_customer_usage` | Read back a customer's recent usage logs — confirm a signal landed. |
 | `clocknext_get_customer_balances` | A customer's current wallet / credit / outcome / unit balances. |
 | `clocknext_get_customer_plan` | A customer's current active plan (from their purchase). |
 
@@ -255,14 +254,14 @@ Plus catalogue CRUD (`create_plan` / `create_credit` / `create_outcome` /
 A typical agent flow: `whoami` → `list_models` → `get_customer_plan` (confirm
 the plan, and that every model and agent key the code will send resolves) → run
 the product's own code so it fires a real signal through `@clocknext/sdk` →
-`get_customer_usage` (confirm it landed). The `clocknext-onboarding` skill
+the SDK's `signals.usageLog({ customerId })` (confirm it landed). The `clocknext-onboarding` skill
 orchestrates all of this.
 
 **The MCP configures billing but never meters it.** There is no record/track
 tool by design, and no preview either: real signals come from your product's
 code via the SDK (`signals.credit` / `.wallet` / `.outcome`), which is also the
-only thing that proves the integration end-to-end. `get_customer_usage` is the
-proof one landed.
+only thing that proves the integration end-to-end. The SDK's `signals.usageLog()`
+is the proof one landed; the MCP has no usage-read tool.
 
 ## Development
 

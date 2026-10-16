@@ -27,7 +27,8 @@ two money gates are the guardrails.
 4. **Read it back** (why: a signal that "sent" isn't proof — ingest is **asynchronous**, so
    a signal your code accepted can still be rejected downstream, e.g. an `agentKey` that
    matches nothing. You confirm it *landed and produced the expected usage record*):
-   - `clocknext_get_customer_usage` → the log landed with the expected model, tokens, cost.
+   - The SDK's `signals.usageLog({ customerId })` → the log landed with the expected model,
+     tokens, cost. The MCP has no usage-read tool.
    - `clocknext_get_customer_balances` → credits/outcomes drew down as expected.
    - For **Units**, read Unit usage/event counts through the product SDK/API's supported Unit
      usage endpoint. The MCP does not expose a Unit-event read tool, and an ARREAR Unit may

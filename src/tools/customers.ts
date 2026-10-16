@@ -5,7 +5,7 @@ import { errMsg, errorResult, jsonResult } from "./util";
 
 /**
  * Customer tools — create/read customers, subscribe them to a plan (purchase),
- * read a customer's usage / balances / current plan, and a bulk import. They go
+ * read a customer's balances / current plan, and a bulk import. They go
  * through the MCP's own API client (`src/api.ts`). They power the
  * clocknext-setup-billing skill's "dummy customer + test signal + confirm it landed"
  * step and the clocknext-customer-mapping / bulk-import skills.
@@ -96,33 +96,6 @@ export function registerCustomerTools(server: McpServer, cnk: ClockNextApi): voi
     async (args) => {
       try {
         return jsonResult(await cnk.customers.list(args));
-      } catch (err) {
-        return errorResult(errMsg(err));
-      }
-    },
-  );
-
-  server.registerTool(
-    "clocknext_get_customer_usage",
-    {
-      title: "ClockNext: get customer usage",
-      description:
-        "Read back a customer's recent usage logs (most recent first). Use it to CONFIRM a signal landed — after running the product's code so it fires a real signal, check the event shows up with the expected model, tokens, and cost. This is the ONLY proof a real signal landed: the MCP cannot record usage, and ingest is asynchronous, so a signal your code 'sent' is not billed until it appears here.",
-      inputSchema: {
-        id: z.string().describe("The ClockNext customer id."),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe("Max usage rows to return (most recent first)."),
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true },
-    },
-    async ({ id, limit }) => {
-      try {
-        return jsonResult(await cnk.customers.usage(id, limit ? { limit } : undefined));
       } catch (err) {
         return errorResult(errMsg(err));
       }

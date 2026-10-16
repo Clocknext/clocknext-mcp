@@ -477,16 +477,6 @@ export class ClockNextApi {
       return { customers: result.customers, nextCursor: result.nextCursor };
     },
 
-    /** `GET /api/v1/usage?customerId=` — recent usage logs + totals. */
-    usage: async (id: string, params: { limit?: number } = {}): Promise<unknown> => {
-      const result = await this.request<{ customer: unknown; totals: unknown; logs: unknown }>({
-        method: "GET",
-        path: "/api/v1/usage",
-        query: { customerId: id, limit: params.limit },
-      });
-      return { customer: result.customer, totals: result.totals, logs: result.logs };
-    },
-
     /** `GET /api/v1/customers/:id/balances`. */
     balances: (id: string): Promise<unknown> => {
       return this.request({ method: "GET", path: `${idPath("/api/v1/customers", id)}/balances` });
